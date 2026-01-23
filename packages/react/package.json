@@ -52,7 +52,8 @@
   "peerDependencies": {
     "@webspatial/core-sdk": "workspace:*",
     "react": ">=18.0.0",
-    "react-dom": ">=18.0.0"
+    "react-dom": ">=18.0.0",
+    "html2canvas": "^1.4.1"
   },
   "peerDependenciesMeta": {
     "@webspatial/core-sdk": {
@@ -62,6 +63,9 @@
       "optional": true
     },
     "react-dom": {
+      "optional": true
+    },
+    "html2canvas": {
       "optional": true
     }
   },

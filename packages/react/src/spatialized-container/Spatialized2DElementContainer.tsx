@@ -22,6 +22,7 @@ import {
 import { Spatialized2DElement } from '@webspatial/core-sdk'
 import { createPortal } from 'react-dom'
 import { getInheritedStyleProps, parseCornerRadius } from './utils'
+import { isAndroidPlatform } from '../utils/androidBitmapCapture'
 
 function asyncLoadStyleToChildWindow(
   childWindow: WindowProxy,
@@ -127,8 +128,11 @@ function getJSXPortalInstance<P extends ElementType>(
   return <El style={style} {...props} />
 }
 
-function useSyncHeaderStyle(windowProxy: WindowProxy) {
+function useSyncHeaderStyle(windowProxy: WindowProxy, enabled: boolean = true) {
   useEffect(() => {
+    // Skip on Android - fake WindowProxy doesn't have real DOM
+    if (!enabled) return
+
     // sync parent head to child when document header style changed
     const headObserver = new MutationObserver(_ => {
       syncParentHeadToChild(windowProxy)
@@ -138,7 +142,7 @@ function useSyncHeaderStyle(windowProxy: WindowProxy) {
     return () => {
       headObserver.disconnect()
     }
-  }, [])
+  }, [enabled])
 }
 
 function useSyncDocumentTitle(
@@ -161,7 +165,13 @@ function SpatializedContent<P extends ElementType>(
   const spatialized2DElement = spatializedElement as Spatialized2DElement
   const windowProxy = spatialized2DElement.windowProxy
 
-  useSyncHeaderStyle(windowProxy)
+  // On Android, we use a fake WindowProxy that doesn't have a real DOM.
+  // Skip portal rendering - content is already rendered in StandardSpatializedContainer
+  // and will be captured as bitmaps for native rendering.
+  const isAndroid = isAndroidPlatform()
+
+  // Only sync styles on non-Android platforms (visionOS has real WKWebView windows)
+  useSyncHeaderStyle(windowProxy, !isAndroid)
 
   const name: string = (restProps as any)['data-name'] || ''
   useSyncDocumentTitle(windowProxy, spatialized2DElement, name)
@@ -169,6 +179,13 @@ function SpatializedContent<P extends ElementType>(
   const portalInstanceObject: PortalInstanceObject = useContext(
     PortalInstanceContext,
   )!
+
+  // On Android, don't use createPortal since the fake WindowProxy
+  // doesn't have a real document.body DOM node
+  if (isAndroid) {
+    return null
+  }
+
   const JSXPortalInstance = getJSXPortalInstance(
     restProps,
     portalInstanceObject,
@@ -201,6 +218,17 @@ function getExtraSpatializedElementProperties(
 async function createSpatializedElement() {
   const spatializedElement = await getSession()!.createSpatialized2DElement()
   const windowProxy = spatializedElement.windowProxy
+
+  // On Android, we use a fake WindowProxy that doesn't have a real DOM.
+  // Skip all WindowProxy operations - bitmap capture renders from main WebView.
+  if (isAndroidPlatform()) {
+    console.log(
+      '[WebSpatial] Android: Skipping WindowProxy setup, using bitmap capture',
+    )
+    return spatializedElement
+  }
+
+  // VisionOS: Each element gets a real WKWebView, set up its styles
   setOpenWindowStyle(windowProxy)
   await syncParentHeadToChild(windowProxy)
 

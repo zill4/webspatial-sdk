@@ -9,6 +9,10 @@ import {
 } from '../types'
 import { getSession } from '../../utils'
 import { convertDOMRectToSceneSpace } from '../transform-utils'
+import {
+  isAndroidPlatform,
+  captureElementBitmap,
+} from '../../utils/androidBitmapCapture'
 
 type DomRect = {
   x: number
@@ -78,6 +82,11 @@ export class PortalInstanceObject {
     computedStyle: CSSStyleDeclaration,
   ) => Record<string, string | number>
 
+  // Bitmap capture state for Android
+  private pendingBitmapCapture: ReturnType<typeof setTimeout> | null = null
+  private lastCapturedBitmap: string | null = null
+  private bitmapCaptureThrottleMs = 100
+
   constructor(
     spatialId: string,
     spatializedContainerObject: SpatializedContainerObject,
@@ -101,6 +110,10 @@ export class PortalInstanceObject {
 
   // called when PortalSpatializedContainer is mounted
   init() {
+    console.log(
+      '[WebSpatial Debug] PortalInstanceObject.init()',
+      this.spatialId,
+    )
     this.spatializedContainerObject.onSpatialTransformVisibilityChange(
       this.spatialId,
       this.onSpatialTransformVisibilityChange,
@@ -118,6 +131,11 @@ export class PortalInstanceObject {
   private onSpatialTransformVisibilityChange = (
     spatialTransform: SpatialTransformVisibility,
   ) => {
+    console.log(
+      '[WebSpatial Debug] onSpatialTransformVisibilityChange',
+      this.spatialId,
+      spatialTransform,
+    )
     this.cachedTransformVisibilityInfo = {
       transformMatrix: new DOMMatrix(spatialTransform.transform),
       visibility: spatialTransform.visibility,
@@ -127,12 +145,21 @@ export class PortalInstanceObject {
 
   // called when 2D frame change
   notify2DFrameChange() {
+    console.log('[WebSpatial Debug] notify2DFrameChange called', this.spatialId)
     const dom = this.spatializedContainerObject.querySpatialDomBySpatialId(
       this.spatialId,
     )
     if (!dom) {
+      console.log(
+        '[WebSpatial Debug] notify2DFrameChange: dom not found',
+        this.spatialId,
+      )
       return
     }
+    console.log(
+      '[WebSpatial Debug] notify2DFrameChange: dom found',
+      this.spatialId,
+    )
     const computedStyle = getComputedStyle(dom)
     this.cachedDomInfo = {
       dom,
@@ -190,6 +217,11 @@ export class PortalInstanceObject {
 
   // called when SpatializedElement is created
   attachSpatializedElement(spatializedElement: SpatializedElement) {
+    console.log(
+      '[WebSpatial Debug] attachSpatializedElement',
+      this.spatialId,
+      spatializedElement.id,
+    )
     this.spatializedElement = spatializedElement
     // attach to spatializedContainerObject
     this.addToParent(spatializedElement)
@@ -219,18 +251,78 @@ export class PortalInstanceObject {
     this.inAddingToParent = false
   }
 
+  /**
+   * Captures the DOM element as a bitmap for Android XR rendering.
+   * Uses throttling to prevent excessive captures.
+   */
+  private scheduleBitmapCapture() {
+    if (!isAndroidPlatform()) return
+    if (!this.dom || !this.spatializedElement) return
+
+    // Clear any pending capture
+    if (this.pendingBitmapCapture) {
+      clearTimeout(this.pendingBitmapCapture)
+    }
+
+    // Schedule a new capture
+    this.pendingBitmapCapture = setTimeout(async () => {
+      this.pendingBitmapCapture = null
+
+      if (!this.dom || !this.spatializedElement) return
+
+      try {
+        // Temporarily make the element visible for capture
+        const originalVisibility = this.dom.style.visibility
+        this.dom.style.visibility = 'visible'
+
+        const bitmap = await captureElementBitmap(this.dom)
+
+        // Restore visibility
+        this.dom.style.visibility = originalVisibility
+
+        // Only send if bitmap changed
+        if (bitmap && bitmap !== this.lastCapturedBitmap) {
+          this.lastCapturedBitmap = bitmap
+          // Update with just the bitmap to avoid race conditions
+          this.spatializedElement.updateProperties({
+            bitmap,
+          })
+        }
+      } catch (error) {
+        console.error('[WebSpatial] Failed to capture bitmap:', error)
+      }
+    }, this.bitmapCaptureThrottleMs)
+  }
+
   private updateSpatializedElementProperties() {
-    // console.log('updateSpatializedElement', this.spatializedElement)
     // read from spatializedContainerContext
     const dom = this.dom
     const spatializedElement = this.spatializedElement
     const visibility = this.visibility
+
+    console.log(
+      '[WebSpatial Debug] updateSpatializedElementProperties check:',
+      {
+        spatialId: this.spatialId,
+        hasDom: !!dom,
+        hasSpatializedElement: !!spatializedElement,
+        visibility: visibility,
+        hasTransformMatrix: !!this.transformMatrix,
+      },
+    )
+
     if (!dom || !spatializedElement || !visibility || !this.transformMatrix) {
-      // console.log(
-      //   `not ready to  updateSpatializedElementProperties! dom is ${!!dom} spatializedElement is ${spatializedElement} visibility is ${visibility}`,
-      // )
+      console.log(
+        '[WebSpatial Debug] updateSpatializedElementProperties: NOT READY',
+        this.spatialId,
+      )
       return
     }
+
+    console.log(
+      '[WebSpatial Debug] updateSpatializedElementProperties: READY, sending update',
+      this.spatialId,
+    )
 
     const computedStyle = this.computedStyle!
     const isFixedPosition = this.isFixedPosition!
@@ -311,6 +403,10 @@ export class PortalInstanceObject {
     Object.assign(this.dom, {
       __spatializedElement: spatializedElement,
     })
+
+    // Schedule bitmap capture for Android XR
+    // This captures the element content and sends it to native for rendering
+    this.scheduleBitmapCapture()
   }
 }
 

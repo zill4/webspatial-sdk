@@ -75,6 +75,12 @@ export interface SpatializedElementProperties {
   enableMagnifyStartGesture: boolean
   enableMagnifyGesture: boolean
   enableMagnifyEndGesture: boolean
+  /**
+   * Base64-encoded bitmap data for Android XR rendering.
+   * On Android, since we can't create multiple WebViews like visionOS,
+   * we capture HTML content as bitmaps and render them on SpatialPanels.
+   */
+  bitmap: string
 }
 
 export interface Spatialized2DElementProperties

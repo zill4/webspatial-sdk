@@ -40,6 +40,9 @@ android {
 }
 
 dependencies {
+    // Local HTTP server for serving web assets (required for Next.js module loading)
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
+
     implementation(libs.guava)
     implementation(libs.kotlinx.coroutines.guava)
     implementation(libs.androidx.core.ktx)

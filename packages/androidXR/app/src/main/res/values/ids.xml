@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- IDs for storing gesture detectors as view tags -->
+    <item name="gesture_detector" type="id"/>
+    <item name="scale_detector" type="id"/>
+    <item name="rotation_detector" type="id"/>
+</resources>
