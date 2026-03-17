@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
 } from 'react'
 import { SpatializedContainer } from './SpatializedContainer'
 import { getSession } from '../utils'
@@ -24,10 +25,11 @@ function getAbsoluteURL(url?: string) {
   if (!url) {
     return ''
   }
-  if (url.startsWith('http') || url.startsWith('//')) {
+  try {
+    return new URL(url, document.baseURI).toString()
+  } catch {
     return url
   }
-  return window.location.origin + url
 }
 
 function createLoadEvent(
@@ -109,61 +111,43 @@ function SpatializedContent(props: SpatializedStatic3DContentProps) {
   return <></>
 }
 
-async function createSpatializedElement() {
-  return getSession()!.createSpatializedStatic3DElement()
-}
-
 function SpatializedStatic3DElementContainerBase(
   props: SpatializedStatic3DContainerProps,
   ref: ForwardedRef<SpatializedStatic3DElementRef>,
 ) {
+  const promiseRef = useRef<Promise<SpatializedStatic3DElement> | null>(null)
+
+  const createSpatializedElement = useCallback(() => {
+    const url = getAbsoluteURL(props.src)
+    promiseRef.current = getSession()!.createSpatializedStatic3DElement(url)
+    return promiseRef.current
+  }, [])
   const extraRefProps = useCallback(
     (domProxy: SpatializedStatic3DElementRef) => {
-      const modelTransform = new DOMMatrix()
-      let needupdate = false
-      const triggerUpdate = () => {
-        const spatializedElement = (domProxy as any)
-          .__spatializedElement as SpatializedStatic3DElement
-        spatializedElement.updateModelTransform(modelTransform)
-        needupdate = false
-      }
-      const domMatrixProxy = new Proxy(modelTransform, {
-        get(target, prop, receiver) {
-          const value = Reflect.get(target, prop, receiver)
-          if (typeof value === 'function') {
-            return function (...args: any[]) {
-              requestAnimationFrame(triggerUpdate)
-              return value.apply(target, args)
-            }
-          } else {
-            return value
-          }
-        },
-        set(target, prop, value) {
-          const success = Reflect.set(target, prop, value)
-          if (!needupdate) {
-            needupdate = true
-            requestAnimationFrame(triggerUpdate)
-          }
-          return success
-        },
-      })
+      let modelTransform = new DOMMatrixReadOnly()
 
       return {
-        currentSrc: () => getAbsoluteURL(props.src),
-        ready: () => {
-          const spatializedElement = (domProxy as any)
-            .__spatializedElement as SpatializedStatic3DElement
-
-          const promise = spatializedElement.ready.then((success: boolean) => {
-            if (success) {
-              return createLoadSuccessEvent(() => domProxy)
-            }
-            throw createLoadFailureEvent(() => domProxy)
-          })
-          return promise
+        get currentSrc(): string {
+          return getAbsoluteURL(props.src)
         },
-        entityTransform: () => domMatrixProxy,
+        get ready(): Promise<ModelLoadEvent> {
+          return promiseRef
+            .current!.then(spatializedElement => spatializedElement.ready)
+            .then(success => {
+              if (success) return createLoadSuccessEvent(() => domProxy)
+              throw createLoadFailureEvent(() => domProxy)
+            })
+        },
+        get entityTransform(): DOMMatrixReadOnly {
+          return modelTransform
+        },
+        set entityTransform(value: DOMMatrixReadOnly) {
+          modelTransform = value
+          const spatializedElement = (domProxy as any).__spatializedElement as
+            | SpatializedStatic3DElement
+            | undefined
+          spatializedElement?.updateModelTransform(modelTransform)
+        },
       }
     },
     [],
