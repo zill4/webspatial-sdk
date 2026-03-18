@@ -48,7 +48,9 @@ async function loadSnapdom(): Promise<any | null> {
     }
     // Wait a bit before retrying (in case of module loading race)
     if (attempt < 2) {
-      console.log(`[WebSpatial] snapdom not on window, retry ${attempt + 1}/3...`)
+      console.log(
+        `[WebSpatial] snapdom not on window, retry ${attempt + 1}/3...`,
+      )
       await new Promise(resolve => setTimeout(resolve, 100))
     }
   }
@@ -57,7 +59,10 @@ async function loadSnapdom(): Promise<any | null> {
     // Try dynamic import
     console.log('[WebSpatial] Trying dynamic import of @zumer/snapdom...')
     const moduleName = '@zumer/snapdom'
-    const dynamicImport = new Function('moduleName', 'return import(moduleName)')
+    const dynamicImport = new Function(
+      'moduleName',
+      'return import(moduleName)',
+    )
     const module = await dynamicImport(moduleName)
     snapdomModule = module.snapdom || module.default || module
     snapdomChecked = true
@@ -85,18 +90,25 @@ async function loadHtml2Canvas(): Promise<any | null> {
     html2canvasModule = (window as any).html2canvas
     html2canvasChecked = true
     html2canvasAvailable = true
-    console.log('[WebSpatial] Using globally provided html2canvas (fallback mode)')
+    console.log(
+      '[WebSpatial] Using globally provided html2canvas (fallback mode)',
+    )
     return html2canvasModule
   }
 
   try {
     const moduleName = 'html2canvas'
-    const dynamicImport = new Function('moduleName', 'return import(moduleName)')
+    const dynamicImport = new Function(
+      'moduleName',
+      'return import(moduleName)',
+    )
     const module = await dynamicImport(moduleName)
     html2canvasModule = module.default || module
     html2canvasChecked = true
     html2canvasAvailable = true
-    console.log('[WebSpatial] Loaded html2canvas via dynamic import (fallback mode)')
+    console.log(
+      '[WebSpatial] Loaded html2canvas via dynamic import (fallback mode)',
+    )
     return html2canvasModule
   } catch (error) {
     html2canvasChecked = true
@@ -144,9 +156,7 @@ export function getAndroidRenderMode(): AndroidRenderMode | null {
     return null
   }
 
-  return (
-    'bitmap-capture'
-  ) as AndroidRenderMode
+  return 'bitmap-capture' as AndroidRenderMode
 }
 
 export function supportsAndroidLiveWindowProxy(): boolean {
@@ -204,13 +214,43 @@ function injectCaptureBackground(
 ): () => void {
   const restoreFunctions: (() => void)[] = []
 
-  // Inject background on the element itself
-  const originalBg = element.style.backgroundColor
   const wasTransparent = hasTransparentBackground(element)
-  element.style.backgroundColor = backgroundColor
-  restoreFunctions.push(() => {
-    element.style.backgroundColor = originalBg
-  })
+  if (wasTransparent) {
+    const originalBg = element.style.backgroundColor
+    element.style.backgroundColor = backgroundColor
+    restoreFunctions.push(() => {
+      element.style.backgroundColor = originalBg
+    })
+  }
+
+  const shouldInjectDescendantBackground = (
+    candidate: HTMLElement,
+  ): boolean => {
+    if (!hasTransparentBackground(candidate)) {
+      return false
+    }
+
+    const style = window.getComputedStyle(candidate)
+    if (style.display === 'inline' || style.display === 'contents') {
+      return false
+    }
+
+    const rect = candidate.getBoundingClientRect()
+    const hasMeaningfulBox = rect.width >= 32 && rect.height >= 32
+    if (!hasMeaningfulBox) {
+      return false
+    }
+
+    const hasNestedLayout = candidate.children.length > 0
+    const hasVisualContainerTraits =
+      style.borderRadius !== '0px' ||
+      style.boxShadow !== 'none' ||
+      style.backdropFilter !== 'none' ||
+      style.overflow !== 'visible' ||
+      style.borderStyle !== 'none'
+
+    return hasNestedLayout || hasVisualContainerTraits
+  }
 
   // Find and inject background on ALL child elements with transparent backgrounds
   // This is crucial for spatial mode where many elements have `background: none`
@@ -219,7 +259,7 @@ function injectCaptureBackground(
 
   allDescendants.forEach(el => {
     const htmlEl = el as HTMLElement
-    if (hasTransparentBackground(htmlEl)) {
+    if (shouldInjectDescendantBackground(htmlEl)) {
       const childOriginalBg = htmlEl.style.backgroundColor
       htmlEl.style.backgroundColor = backgroundColor
       injectedCount++
@@ -254,7 +294,9 @@ async function waitForContent(
   // This is critical for pages that load data via useEffect
   if (!initialRenderDelayApplied) {
     initialRenderDelayApplied = true
-    console.log('[WebSpatial] Applying initial render delay (1500ms) for first capture')
+    console.log(
+      '[WebSpatial] Applying initial render delay (1500ms) for first capture',
+    )
     await new Promise(resolve => setTimeout(resolve, 1500))
   }
 
@@ -284,7 +326,9 @@ async function waitForContent(
 
     const incompleteImages = Array.from(images).filter(img => !img.complete)
     if (incompleteImages.length > 0) {
-      console.log(`[WebSpatial] Waiting for ${incompleteImages.length} images to load (timeout: ${imageTimeoutMs}ms)`)
+      console.log(
+        `[WebSpatial] Waiting for ${incompleteImages.length} images to load (timeout: ${imageTimeoutMs}ms)`,
+      )
 
       const imagePromises = incompleteImages.map(img => {
         return new Promise<void>(resolve => {
@@ -300,8 +344,12 @@ async function waitForContent(
       ])
 
       // Log how many images loaded
-      const stillIncomplete = incompleteImages.filter(img => !img.complete).length
-      console.log(`[WebSpatial] Image wait complete. ${stillIncomplete} images still loading.`)
+      const stillIncomplete = incompleteImages.filter(
+        img => !img.complete,
+      ).length
+      console.log(
+        `[WebSpatial] Image wait complete. ${stillIncomplete} images still loading.`,
+      )
     } else {
       console.log(`[WebSpatial] All ${images.length} images already complete`)
     }
@@ -311,7 +359,9 @@ async function waitForContent(
   // Check if element has minimal content and wait more if needed
   const textContent = element.innerText?.trim() || ''
   if (textContent.length < 100) {
-    console.log(`[WebSpatial] Element has minimal content (${textContent.length} chars), waiting 500ms more`)
+    console.log(
+      `[WebSpatial] Element has minimal content (${textContent.length} chars), waiting 500ms more`,
+    )
     await new Promise(resolve => setTimeout(resolve, 500))
   }
 }
@@ -374,7 +424,9 @@ async function captureWithSnapdom(
   try {
     const cappedScale = Math.min(scale, 1.5)
     const rect = element.getBoundingClientRect()
-    console.log(`[WebSpatial] snapdom capturing: rect=(${rect.x.toFixed(0)},${rect.y.toFixed(0)},${rect.width.toFixed(0)},${rect.height.toFixed(0)}), scale=${cappedScale}`)
+    console.log(
+      `[WebSpatial] snapdom capturing: rect=(${rect.x.toFixed(0)},${rect.y.toFixed(0)},${rect.width.toFixed(0)},${rect.height.toFixed(0)}), scale=${cappedScale}`,
+    )
 
     const result = await snapdom(element, {
       scale: cappedScale,
@@ -469,45 +521,61 @@ function getContentOffset(element: HTMLElement): { top: number; left: number } {
   }
 }
 
-/**
- * Temporarily make element visible for capture.
- * Spatialized elements have visibility: hidden by default.
- * Returns a cleanup function to restore original visibility.
- */
-function makeElementVisible(element: HTMLElement): () => void {
-  const restoreFunctions: (() => void)[] = []
+type VisibleCaptureClone = {
+  cleanup: () => void
+  clone: HTMLElement
+}
 
-  // Make the element itself visible
-  const originalVisibility = element.style.visibility
-  const computedVisibility = window.getComputedStyle(element).visibility
-  if (computedVisibility === 'hidden') {
-    element.style.visibility = 'visible'
-    console.log(`[WebSpatial] Made element visible for capture (was: ${computedVisibility})`)
-    restoreFunctions.push(() => {
-      element.style.visibility = originalVisibility
+/**
+ * Create an offscreen visible clone for capture.
+ *
+ * Android bitmap mode keeps the live spatialized element hidden in the page
+ * layout. Capturing the live node directly is unreliable because html2canvas
+ * still ends up honoring the hidden subtree in practice. Cloning into a
+ * detached offscreen sandbox gives us a real visible DOM subtree to render.
+ */
+function createVisibleCaptureClone(element: HTMLElement): VisibleCaptureClone {
+  const rect = element.getBoundingClientRect()
+  const sandbox = document.createElement('div')
+  sandbox.setAttribute('aria-hidden', 'true')
+  sandbox.style.position = 'fixed'
+  sandbox.style.left = '-10000px'
+  sandbox.style.top = '0px'
+  sandbox.style.pointerEvents = 'none'
+  sandbox.style.zIndex = '-1'
+  sandbox.style.contain = 'layout style paint'
+  sandbox.style.opacity = '1'
+
+  const clone = element.cloneNode(true) as HTMLElement
+
+  const makeCloneVisible = (node: HTMLElement) => {
+    node.style.visibility = 'visible'
+    node.style.opacity = '1'
+    node.style.transition = 'none'
+    node.style.animation = 'none'
+    node.style.transform = 'none'
+    node.style.top = '0px'
+    node.style.left = '0px'
+
+    Array.from(node.children).forEach(child => {
+      if (child instanceof HTMLElement) {
+        makeCloneVisible(child)
+      }
     })
   }
 
-  // Also make all child elements visible (they may be hidden too)
-  const allDescendants = element.querySelectorAll('*')
-  allDescendants.forEach(el => {
-    const htmlEl = el as HTMLElement
-    const childComputedVisibility = window.getComputedStyle(htmlEl).visibility
-    if (childComputedVisibility === 'hidden') {
-      const childOriginalVisibility = htmlEl.style.visibility
-      htmlEl.style.visibility = 'visible'
-      restoreFunctions.push(() => {
-        htmlEl.style.visibility = childOriginalVisibility
-      })
-    }
-  })
+  makeCloneVisible(clone)
+  clone.style.position = 'relative'
+  clone.style.margin = '0px'
+  clone.style.width = `${Math.ceil(rect.width)}px`
+  clone.style.minHeight = `${Math.ceil(rect.height)}px`
 
-  if (restoreFunctions.length > 1) {
-    console.log(`[WebSpatial] Made ${restoreFunctions.length} elements visible for capture`)
-  }
+  sandbox.appendChild(clone)
+  document.body.appendChild(sandbox)
 
-  return () => {
-    restoreFunctions.forEach(restore => restore())
+  return {
+    clone,
+    cleanup: () => sandbox.remove(),
   }
 }
 
@@ -523,63 +591,12 @@ async function captureWithHtml2Canvas(
 ): Promise<string | null> {
   try {
     const rect = element.getBoundingClientRect()
-    const contentOffset = getContentOffset(element)
-
-    console.log(`[WebSpatial] html2canvas capturing: rect=(${rect.x.toFixed(0)},${rect.y.toFixed(0)},${rect.width.toFixed(0)},${rect.height.toFixed(0)}), contentOffset=(${contentOffset.top},${contentOffset.left})`)
-
-    // Calculate window scroll position
-    const scrollX = window.scrollX || window.pageXOffset || 0
-    const scrollY = window.scrollY || window.pageYOffset || 0
-
-    // The element's absolute position in the document
-    const absoluteX = rect.x + scrollX
-    const absoluteY = rect.y + scrollY
-
-    // Find all elements with position:relative offsets that affect the capture
-    const offsetElements = findOffsetElements(element)
-
-    // Temporarily reset ALL offset elements to capture content at correct position
-    // This prevents the "black at top" issue caused by CSS like `.main-window { top: 70px }`
-    if (offsetElements.length > 0) {
-      console.log(
-        `[WebSpatial] Temporarily resetting ${offsetElements.length} offset elements for capture`,
-      )
-      offsetElements.forEach(({ element: el, topValue, leftValue }) => {
-        el.style.top = '0px'
-        el.style.left = '0px'
-        console.log(
-          `[WebSpatial] Reset: ${el.tagName}.${el.className?.split(' ')[0] || ''} ` +
-            `from top=${topValue}px, left=${leftValue}px to 0`,
-        )
-      })
-
-      // Force browser reflow to ensure layout is updated before capture
-      // Without this, html2canvas may clone the DOM before new positions are applied
-      void element.offsetHeight
-      await new Promise(resolve => setTimeout(resolve, 50))
-      console.log('[WebSpatial] Reflow complete after offset reset')
-    }
-
-    // Create restore function that resets all elements
-    const restorePositions = () => {
-      offsetElements.forEach(({ element: el, originalTop, originalLeft }) => {
-        el.style.top = originalTop
-        el.style.left = originalLeft
-      })
-    }
-
-    // Ensure element is scrolled to top if it has internal scroll
-    if (element.scrollTop !== 0) {
-      console.log(`[WebSpatial] Resetting element scroll from ${element.scrollTop} to 0`)
-      element.scrollTop = 0
-    }
-
-    // CRITICAL: Make element visible for capture
-    // Spatialized elements have visibility: hidden by default in StandardSpatializedContainer
-    // We need to temporarily make them visible so html2canvas can capture actual content
-    const restoreVisibility = makeElementVisible(element)
+    console.log(
+      `[WebSpatial] html2canvas capturing via visible clone: rect=(${rect.x.toFixed(0)},${rect.y.toFixed(0)},${rect.width.toFixed(0)},${rect.height.toFixed(0)})`,
+    )
 
     // Ensure window is scrolled to show the element
+    const scrollY = window.scrollY || window.pageYOffset || 0
     const viewportTop = scrollY
     const viewportBottom = scrollY + window.innerHeight
     const elementTop = rect.y + scrollY
@@ -591,22 +608,22 @@ async function captureWithHtml2Canvas(
     )
 
     let canvas: HTMLCanvasElement
+    const captureClone = createVisibleCaptureClone(element)
+    const restoreBackground = injectCaptureBackground(
+      captureClone.clone,
+      backgroundColor || DEFAULT_CAPTURE_BACKGROUND,
+    )
     try {
-      // Calculate the capture position accounting for parent offsets
-      // We reset the parent offsets above, so the element should now be at its natural position
-      // Use the CURRENT rect after offset reset
-      const currentRect = element.getBoundingClientRect()
-      const captureX = currentRect.x + scrollX
-      const captureY = currentRect.y + scrollY
-
-      console.log(
-        `[WebSpatial] Capture bounds: original=(${absoluteX},${absoluteY}), ` +
-          `afterReset=(${captureX},${captureY}), size=(${currentRect.width}x${currentRect.height})`,
+      await new Promise(resolve =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
       )
 
-      // Capture the element by cropping to its document position
-      // html2canvas renders the full document, then crops to x/y/width/height
-      canvas = await html2canvas(element, {
+      const cloneRect = captureClone.clone.getBoundingClientRect()
+      console.log(
+        `[WebSpatial] Visible clone ready: rect=(${cloneRect.x.toFixed(0)},${cloneRect.y.toFixed(0)},${cloneRect.width.toFixed(0)},${cloneRect.height.toFixed(0)})`,
+      )
+
+      canvas = await html2canvas(captureClone.clone, {
         backgroundColor,
         logging: true, // Enable logging to debug
         scale: Math.min(scale, 1.5),
@@ -615,115 +632,22 @@ async function captureWithHtml2Canvas(
         imageTimeout: 5000,
         removeContainer: true,
         foreignObjectRendering: false,
-        // Don't set scroll offset - let html2canvas use default (current scroll)
-        // scrollX and scrollY would affect rendering position but we want document coordinates
-        // Crop to element's document position
-        // x/y define the top-left corner of the crop region in document coordinates
-        x: captureX,
-        y: captureY,
-        width: currentRect.width,
-        height: currentRect.height,
-        // Use onclone to MOVE the element to (0,0) in the cloned document
-        // This is the key fix for elements far down the page (like footer at Y=1142)
-        // By moving to absolute position (0,0), html2canvas will render at the top-left
-        onclone: (clonedDoc: Document, clonedElement: HTMLElement) => {
-          // Log position for debugging
-          const originalRect = clonedElement.getBoundingClientRect()
-          console.log(`[WebSpatial] CLONE: Element position in clone (${originalRect.x.toFixed(0)},${originalRect.y.toFixed(0)})`)
-
-          // CRITICAL: Make all elements in the cloned document VISIBLE
-          // Spatialized elements have visibility: hidden by default
-          // In the clone, we MUST make them visible so html2canvas renders content
-          clonedElement.style.visibility = 'visible'
-          const hiddenElements = clonedElement.querySelectorAll('*')
-          let visibilityFixCount = 0
-          hiddenElements.forEach(el => {
-            const htmlEl = el as HTMLElement
-            const style = clonedDoc.defaultView?.getComputedStyle(htmlEl)
-            if (style && style.visibility === 'hidden') {
-              htmlEl.style.visibility = 'visible'
-              visibilityFixCount++
-            }
-          })
-          if (visibilityFixCount > 0) {
-            console.log(`[WebSpatial] CLONE: Made ${visibilityFixCount + 1} elements visible`)
-          }
-
-          // Find and reset all offset parents in the CLONED document
-          let parent = clonedElement.parentElement
-          let depth = 0
-          const maxDepth = 10
-
-          while (parent && depth < maxDepth) {
-            const parentStyle = clonedDoc.defaultView?.getComputedStyle(parent)
-            if (parentStyle && parentStyle.position === 'relative') {
-              const parentTop = parseFloat(parentStyle.top) || 0
-              const parentLeft = parseFloat(parentStyle.left) || 0
-              if (parentTop !== 0 || parentLeft !== 0) {
-                console.log(
-                  `[WebSpatial] CLONE: Reset ${parent.tagName}.${parent.className?.split(' ')[0] || ''} ` +
-                  `from top=${parentTop}px, left=${parentLeft}px to 0`,
-                )
-                parent.style.top = '0px'
-                parent.style.left = '0px'
-              }
-            }
-            parent = parent.parentElement
-            depth++
-          }
-
-          // Force reflow in cloned document
-          void clonedElement.offsetHeight
-
-          const clonedRect = clonedElement.getBoundingClientRect()
-          const clonedStyle = clonedDoc.defaultView?.getComputedStyle(clonedElement)
-          console.log(
-            `[WebSpatial] Cloned element (after visibility fix): rect=(${clonedRect.x.toFixed(0)},${clonedRect.y.toFixed(0)},${clonedRect.width.toFixed(0)},${clonedRect.height.toFixed(0)}), ` +
-            `visibility=${clonedStyle?.visibility}`,
-          )
-
-          // Log first few children to verify content structure
-          const numChildren = Math.min(5, clonedElement.children.length)
-          for (let i = 0; i < numChildren; i++) {
-            const child = clonedElement.children[i] as HTMLElement
-            const childRect = child.getBoundingClientRect()
-            const childStyle = clonedDoc.defaultView?.getComputedStyle(child)
-            console.log(
-              `[WebSpatial] Child ${i}: ${child.tagName}.${child.className?.split(' ')[0] || ''}, ` +
-              `rect=(${childRect.x.toFixed(0)},${childRect.y.toFixed(0)},${childRect.width.toFixed(0)},${childRect.height.toFixed(0)}), ` +
-              `vis=${childStyle?.visibility}, display=${childStyle?.display}`,
-            )
-          }
-
-          // Find and log the product grid specifically
-          const productGrid = clonedElement.querySelector('.auto-fill-grid') as HTMLElement
-          if (productGrid) {
-            const gridRect = productGrid.getBoundingClientRect()
-            const gridStyle = clonedDoc.defaultView?.getComputedStyle(productGrid)
-            console.log(
-              `[WebSpatial] Product grid: rect=(${gridRect.x.toFixed(0)},${gridRect.y.toFixed(0)},${gridRect.width.toFixed(0)},${gridRect.height.toFixed(0)}), ` +
-              `columns=${gridStyle?.gridTemplateColumns?.substring(0, 100)}`,
-            )
-            // Log first product card
-            const firstCard = productGrid.children[0] as HTMLElement
-            if (firstCard) {
-              const cardRect = firstCard.getBoundingClientRect()
-              console.log(`[WebSpatial] First product card: rect=(${cardRect.x.toFixed(0)},${cardRect.y.toFixed(0)},${cardRect.width.toFixed(0)},${cardRect.height.toFixed(0)})`)
-            }
-          }
-        },
       })
     } finally {
-      // Restore visibility and position offsets after capture
-      restoreVisibility()
-      restorePositions()
+      restoreBackground()
+      captureClone.cleanup()
     }
 
     // Debug: Sample pixels to verify content and find where it actually is
     const ctx = canvas.getContext('2d')
     if (ctx) {
       // Sample a grid of positions across the entire canvas
-      const xPositions = [50, Math.floor(canvas.width / 4), Math.floor(canvas.width / 2), Math.floor(canvas.width * 3 / 4)]
+      const xPositions = [
+        50,
+        Math.floor(canvas.width / 4),
+        Math.floor(canvas.width / 2),
+        Math.floor((canvas.width * 3) / 4),
+      ]
       const yPositions = [50, 100, 200, 400, 600, 800, 1000, 1200, 1400]
       const samples: { name: string; x: number; y: number }[] = []
       yPositions.forEach(y => {
@@ -736,33 +660,52 @@ async function captureWithHtml2Canvas(
         }
       })
 
-      console.log(`[WebSpatial] Canvas size: ${canvas.width}x${canvas.height}, scale=${scale}`)
+      console.log(
+        `[WebSpatial] Canvas size: ${canvas.width}x${canvas.height}, scale=${scale}`,
+      )
       let bgCount = 0
       let contentCount = 0
       let contentPixels: string[] = []
       samples.forEach(s => {
         const pixel = ctx.getImageData(s.x, s.y, 1, 1).data
-        const isBackground = pixel[0] === 26 && pixel[1] === 26 && pixel[2] === 46 // #1a1a2e
+        const isBackground =
+          pixel[0] === 26 && pixel[1] === 26 && pixel[2] === 46 // #1a1a2e
         if (isBackground) {
           bgCount++
         } else {
           contentCount++
-          contentPixels.push(`${s.name}=rgba(${pixel[0]},${pixel[1]},${pixel[2]})`)
+          contentPixels.push(
+            `${s.name}=rgba(${pixel[0]},${pixel[1]},${pixel[2]})`,
+          )
         }
       })
-      console.log(`[WebSpatial] Grid sample: ${bgCount} BG, ${contentCount} CONTENT`)
+      console.log(
+        `[WebSpatial] Grid sample: ${bgCount} BG, ${contentCount} CONTENT`,
+      )
       if (contentPixels.length > 0) {
-        console.log(`[WebSpatial] Content pixels: ${contentPixels.slice(0, 10).join(', ')}`)
+        console.log(
+          `[WebSpatial] Content pixels: ${contentPixels.slice(0, 10).join(', ')}`,
+        )
       }
 
       // If no content found in grid, do a more thorough scan
       if (contentCount === 0) {
-        console.log(`[WebSpatial] No content in grid sample - scanning center column...`)
+        console.log(
+          `[WebSpatial] No content in grid sample - scanning center column...`,
+        )
         for (let y = 0; y < canvas.height; y += 30) {
-          const pixel = ctx.getImageData(Math.floor(canvas.width / 2), y, 1, 1).data
-          const isBackground = pixel[0] === 26 && pixel[1] === 26 && pixel[2] === 46
+          const pixel = ctx.getImageData(
+            Math.floor(canvas.width / 2),
+            y,
+            1,
+            1,
+          ).data
+          const isBackground =
+            pixel[0] === 26 && pixel[1] === 26 && pixel[2] === 46
           if (!isBackground) {
-            console.log(`[WebSpatial] First content at Y=${y}: rgba(${pixel[0]},${pixel[1]},${pixel[2]})`)
+            console.log(
+              `[WebSpatial] First content at Y=${y}: rgba(${pixel[0]},${pixel[1]},${pixel[2]})`,
+            )
             break
           }
         }
@@ -809,52 +752,40 @@ export async function captureElementBitmap(
     await waitForContent(element, 500)
   }
 
-  // Inject background if element has transparent/no background
-  // This prevents black panels in XR when rendered on transparent SpatialPanels
-  const restoreBackground = injectCaptureBackground(
-    element,
-    options?.backgroundColor || DEFAULT_CAPTURE_BACKGROUND,
-  )
-
   let result: string | null = null
 
-  try {
-    // Try html2canvas FIRST for better cross-origin image handling
-    // snapdom has issues rendering cross-origin images on some platforms
-    const html2canvas = await loadHtml2Canvas()
-    if (html2canvas) {
-      console.log('[WebSpatial] Using html2canvas (primary)')
-      result = await captureWithHtml2Canvas(
-        html2canvas,
-        element,
-        scale,
-        options?.backgroundColor ?? DEFAULT_CAPTURE_BACKGROUND,
-      )
-      if (result) {
-        const elapsed = Math.round(performance.now() - startTime)
-        console.log(`[WebSpatial] Capture complete (html2canvas, ${elapsed}ms)`)
-        return result
-      }
+  // Try html2canvas FIRST for better cross-origin image handling
+  // snapdom has issues rendering cross-origin images on some platforms
+  const html2canvas = await loadHtml2Canvas()
+  if (html2canvas) {
+    console.log('[WebSpatial] Using html2canvas (primary)')
+    result = await captureWithHtml2Canvas(
+      html2canvas,
+      element,
+      scale,
+      options?.backgroundColor ?? DEFAULT_CAPTURE_BACKGROUND,
+    )
+    if (result) {
+      const elapsed = Math.round(performance.now() - startTime)
+      console.log(`[WebSpatial] Capture complete (html2canvas, ${elapsed}ms)`)
+      return result
     }
-
-    // Fall back to snapdom
-    const snapdom = await loadSnapdom()
-    if (snapdom) {
-      console.log('[WebSpatial] Falling back to snapdom')
-      result = await captureWithSnapdom(snapdom, element, scale)
-      if (result) {
-        const elapsed = Math.round(performance.now() - startTime)
-        console.log(`[WebSpatial] Capture complete (snapdom, ${elapsed}ms)`)
-        return result
-      }
-    }
-
-    console.error('[WebSpatial] No capture library available')
-    return null
-  } finally {
-    // Always restore original background
-    restoreBackground()
   }
+
+  // Fall back to snapdom
+  const snapdom = await loadSnapdom()
+  if (snapdom) {
+    console.log('[WebSpatial] Falling back to snapdom')
+    result = await captureWithSnapdom(snapdom, element, scale)
+    if (result) {
+      const elapsed = Math.round(performance.now() - startTime)
+      console.log(`[WebSpatial] Capture complete (snapdom, ${elapsed}ms)`)
+      return result
+    }
+  }
+
+  console.error('[WebSpatial] No capture library available')
+  return null
 }
 
 /**
