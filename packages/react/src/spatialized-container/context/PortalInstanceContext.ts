@@ -9,6 +9,11 @@ import {
 } from '../types'
 import { getSession } from '../../utils'
 import { convertDOMRectToSceneSpace } from '../transform-utils'
+import {
+  observeContentChanges,
+  usesAndroidBitmapCapture,
+} from '../../utils/androidBitmapCapture'
+import { BitmapCaptureCoordinator } from '../../utils/BitmapCaptureCoordinator'
 
 type DomRect = {
   x: number
@@ -78,6 +83,15 @@ export class PortalInstanceObject {
     computedStyle: CSSStyleDeclaration,
   ) => Record<string, string | number>
 
+  // Bitmap capture state for Android
+  private pendingBitmapCapture: ReturnType<typeof setTimeout> | null = null
+  // Initial delay before first capture (0ms = start immediately, content detection handles fonts/images)
+  private bitmapCaptureInitialDelayMs = 0
+  // Track if capture has been requested via coordinator
+  private captureRequested = false
+  private observedContentDom: HTMLElement | null = null
+  private stopObservingContentChanges: (() => void) | null = null
+
   constructor(
     spatialId: string,
     spatializedContainerObject: SpatializedContainerObject,
@@ -113,6 +127,18 @@ export class PortalInstanceObject {
       this.spatialId,
       this.onSpatialTransformVisibilityChange,
     )
+    // Clear any pending bitmap capture
+    if (this.pendingBitmapCapture) {
+      clearTimeout(this.pendingBitmapCapture)
+      this.pendingBitmapCapture = null
+    }
+    // Clear capture state in coordinator
+    if (this.spatializedElement) {
+      BitmapCaptureCoordinator.clearElement(this.spatializedElement.id)
+    }
+    this.stopObservingContentChanges?.()
+    this.observedContentDom = null
+    this.stopObservingContentChanges = null
   }
 
   private onSpatialTransformVisibilityChange = (
@@ -138,6 +164,10 @@ export class PortalInstanceObject {
       dom,
       computedStyle,
       isFixedPosition: computedStyle.getPropertyValue('position') === 'fixed',
+    }
+
+    if (usesAndroidBitmapCapture()) {
+      this.ensureContentObserver(dom)
     }
 
     this.updateSpatializedElementProperties()
@@ -182,6 +212,22 @@ export class PortalInstanceObject {
       __toLocalSpace,
       __innerSpatializedElement,
     })
+
+  }
+
+  private ensureContentObserver(dom: HTMLElement) {
+    if (!usesAndroidBitmapCapture()) {
+      return
+    }
+    if (this.observedContentDom === dom && this.stopObservingContentChanges) {
+      return
+    }
+
+    this.stopObservingContentChanges?.()
+    this.observedContentDom = dom
+    this.stopObservingContentChanges = observeContentChanges(dom, () => {
+      this.scheduleBitmapCapture(true)
+    })
   }
 
   private async getSpatializedElement() {
@@ -219,16 +265,152 @@ export class PortalInstanceObject {
     this.inAddingToParent = false
   }
 
+  /**
+   * Captures the DOM element as a bitmap for Android XR rendering.
+   * Uses BitmapCaptureCoordinator to prevent duplicate captures across instances.
+   * The initial capture is delayed to allow images to load.
+   */
+  private scheduleBitmapCapture(forceRecapture: boolean = false) {
+    if (!usesAndroidBitmapCapture()) return
+    if (!this.dom || !this.spatializedElement) return
+
+    const elementId = this.spatializedElement.id
+
+    // Check if capture already requested for this element
+    if (this.captureRequested) {
+      return
+    }
+    this.captureRequested = true
+
+    // Clear any existing timeout
+    if (this.pendingBitmapCapture) {
+      clearTimeout(this.pendingBitmapCapture)
+    }
+
+    console.log(
+      `[WebSpatial] Scheduling capture for: ${elementId} (in ${this.bitmapCaptureInitialDelayMs}ms)`,
+    )
+
+    // Schedule the capture with a short delay to allow content to load
+    this.pendingBitmapCapture = setTimeout(async () => {
+      this.pendingBitmapCapture = null
+
+      if (!this.dom || !this.spatializedElement) {
+        console.log(`[WebSpatial] Capture cancelled - element gone: ${elementId}`)
+        return
+      }
+
+      try {
+        // Inject a global style to make ALL spatial elements visible during capture
+        // This is more reliable than inline styles because it affects cloned DOMs too
+        const captureStyleId = '__webspatial_capture_style__'
+        let captureStyle = document.getElementById(captureStyleId) as HTMLStyleElement | null
+        if (!captureStyle) {
+          captureStyle = document.createElement('style')
+          captureStyle.id = captureStyleId
+          document.head.appendChild(captureStyle)
+        }
+        captureStyle.textContent = `
+          .xr-spatial-default,
+          [enable-xr],
+          .xr-spatial-default * {
+            visibility: visible !important;
+          }
+        `
+
+        // Also set inline visibility for good measure
+        const originalVisibility = this.dom.style.visibility
+        const originalCssText = this.dom.style.cssText
+        this.dom.style.setProperty('visibility', 'visible', 'important')
+
+        // Find and make visible all nested spatial elements
+        const nestedSpatialElements = this.dom.querySelectorAll('.xr-spatial-default')
+        const nestedOriginalVisibilities: { element: HTMLElement; visibility: string; cssText: string }[] = []
+        nestedSpatialElements.forEach(el => {
+          const htmlEl = el as HTMLElement
+          nestedOriginalVisibilities.push({
+            element: htmlEl,
+            visibility: htmlEl.style.visibility,
+            cssText: htmlEl.style.cssText,
+          })
+          htmlEl.style.setProperty('visibility', 'visible', 'important')
+        })
+
+
+        // CRITICAL: Hide position:fixed children during parent capture
+        // Fixed-position elements are captured separately as their own spatial elements.
+        // If we don't hide them during parent capture, they appear at their viewport-fixed
+        // positions and overlay the parent content, causing black/covered areas.
+        const fixedElements: { element: HTMLElement; display: string }[] = []
+        this.dom.querySelectorAll('*').forEach(el => {
+          const htmlEl = el as HTMLElement
+          const style = window.getComputedStyle(htmlEl)
+          if (style.position === 'fixed') {
+            fixedElements.push({
+              element: htmlEl,
+              display: htmlEl.style.display,
+            })
+            htmlEl.style.display = 'none'
+          }
+        })
+
+        console.log(
+          `[WebSpatial] Capturing ${elementId} with ${nestedSpatialElements.length} nested spatial elements made visible, ${fixedElements.length} fixed elements hidden`,
+        )
+
+        // Use coordinator to prevent duplicate captures
+        const bitmap =
+          forceRecapture || BitmapCaptureCoordinator.hasCaptured(elementId)
+            ? await BitmapCaptureCoordinator.requestRecapture(
+                elementId,
+                this.dom,
+              )
+            : await BitmapCaptureCoordinator.requestCapture(
+                elementId,
+                this.dom,
+              )
+
+        // Restore visibility for all elements
+        // Remove the global capture style
+        const captureStyleToRemove = document.getElementById('__webspatial_capture_style__')
+        if (captureStyleToRemove) {
+          captureStyleToRemove.textContent = ''
+        }
+
+        this.dom.style.cssText = originalCssText
+        if (originalVisibility) {
+          this.dom.style.visibility = originalVisibility
+        }
+        nestedOriginalVisibilities.forEach(({ element, visibility, cssText }) => {
+          element.style.cssText = cssText
+          if (visibility) {
+            element.style.visibility = visibility
+          }
+        })
+
+        // Restore fixed elements
+        fixedElements.forEach(({ element, display }) => {
+          element.style.display = display
+        })
+
+        if (bitmap) {
+          this.spatializedElement.updateProperties({ bitmap })
+        }
+      } catch (error) {
+        console.error(`[WebSpatial] Capture failed: ${elementId}`, error)
+      } finally {
+        this.captureRequested = false
+      }
+    }, this.bitmapCaptureInitialDelayMs)
+  }
+
   private updateSpatializedElementProperties() {
-    // console.log('updateSpatializedElement', this.spatializedElement)
     // read from spatializedContainerContext
     const dom = this.dom
     const spatializedElement = this.spatializedElement
     const visibility = this.visibility
+
     if (!dom || !spatializedElement || !visibility || !this.transformMatrix) {
-      // console.log(
-      //   `not ready to  updateSpatializedElementProperties! dom is ${!!dom} spatializedElement is ${spatializedElement} visibility is ${visibility}`,
-      // )
       return
     }
 
@@ -311,6 +493,11 @@ export class PortalInstanceObject {
     Object.assign(this.dom, {
       __spatializedElement: spatializedElement,
     })
+
+    if (usesAndroidBitmapCapture()) {
+      // Bitmap mode captures the element content and sends it to native for rendering.
+      this.scheduleBitmapCapture()
+    }
   }
 }
 

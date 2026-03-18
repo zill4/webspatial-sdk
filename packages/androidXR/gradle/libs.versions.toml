@@ -1,5 +1,5 @@
 [versions]
-agp = "8.9.2"
+agp = "8.13.2"
 guava = "32.1.3-android"
 kotlin = "2.0.21"
 coreKtx = "1.15.0"
@@ -15,12 +15,13 @@ activityCompose = "1.9.3"
 runtime = "1.8.0-alpha06"
 composeBom = "2024.09.00"
 ui = "1.8.0-alpha06"
-compose = "1.0.0-alpha01"
-runtimeVersion = "1.0.0-alpha01"
-scenecore = "1.0.0-alpha01"
+compose = "1.0.0-alpha09"
+runtimeVersion = "1.0.0-alpha09"
+scenecore = "1.0.0-alpha10"
 appcompat = "1.7.0"
 material = "1.12.0"
 toolsCore = "1.0.0-alpha13"
+webkit = "1.12.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -49,6 +50,7 @@ androidx-scenecore = { group = "androidx.xr.scenecore", name = "scenecore", vers
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 androidx-tools-core = { group = "androidx.privacysandbox.tools", name = "tools-core", version.ref = "toolsCore" }
+androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

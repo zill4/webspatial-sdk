@@ -26,6 +26,16 @@ open class SpatialObject {
         weakRefObjects[id] = WeakReference(this)
     }
 
+    /**
+     * Constructor with custom ID - used when the ID is pre-generated
+     * (e.g., from window.open webspatial:// URL handling)
+     */
+    constructor(customId: String) {
+        this.id = customId
+        objects[id] = this
+        weakRefObjects[id] = WeakReference(this)
+    }
+
     open fun destroy() {
         if (_isDestroyed) {
             console.warn("SpatialObject already destroyed $this")

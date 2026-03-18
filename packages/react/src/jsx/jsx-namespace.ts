@@ -4,8 +4,10 @@ import {
   SpatialDragStartEvent,
   SpatialDragEvent,
   SpatialDragEndEvent,
+  SpatialRotateStartEvent,
   SpatialRotateEvent,
   SpatialRotateEndEvent,
+  SpatialMagnifyStartEvent,
   SpatialMagnifyEvent,
   SpatialMagnifyEndEvent,
   //@ts-ignore bypass ts check for external
@@ -109,12 +111,15 @@ export namespace WebSpatialJSX {
     [K in keyof ReactJSXIntrinsicElements]: ReactJSXIntrinsicElements[K] & {
       style?: React.CSSProperties
       'enable-xr'?: boolean
+      'enable-xr-monitor'?: boolean
       onSpatialTap?: (e: SpatialTapEvent) => void
       onSpatialDragStart?: (e: SpatialDragStartEvent) => void
       onSpatialDrag?: (e: SpatialDragEvent) => void
       onSpatialDragEnd?: (e: SpatialDragEndEvent) => void
+      onSpatialRotateStart?: (e: SpatialRotateStartEvent) => void
       onSpatialRotate?: (e: SpatialRotateEvent) => void
       onSpatialRotateEnd?: (e: SpatialRotateEndEvent) => void
+      onSpatialMagnifyStart?: (e: SpatialMagnifyStartEvent) => void
       onSpatialMagnify?: (e: SpatialMagnifyEvent) => void
       onSpatialMagnifyEnd?: (e: SpatialMagnifyEndEvent) => void
     }

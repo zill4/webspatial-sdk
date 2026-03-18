@@ -11,10 +11,13 @@ import React, {
 import { Spatialized2DElement } from '@webspatial/core-sdk'
 
 import {
+  ensureWindowDocumentStructure,
   setOpenWindowStyle,
   syncParentHeadToChild,
 } from '../utils/windowStyleSync'
 import { useSyncHeadStyles } from '../utils/useSyncHeadStyles'
+import { getSession } from '../utils'
+import { usesAndroidBitmapCapture } from '../utils/androidBitmapCapture'
 import { getInheritedStyleProps, parseCornerRadius } from './utils'
 import {
   SpatialCustomStyleVars,
@@ -28,7 +31,6 @@ import {
   PortalInstanceContext,
   PortalInstanceObject,
 } from './context/PortalInstanceContext'
-import { getSession } from '../utils'
 function getJSXPortalInstance<P extends ElementType>(
   inProps: Omit<
     SpatializedContentProps<SpatializedElementRef, P>,
@@ -71,7 +73,9 @@ function useSyncDocumentTitle(
   name: string,
 ) {
   useEffect(() => {
-    windowProxy.document.title = name
+    const childDocument = ensureWindowDocumentStructure(windowProxy)
+    if (!childDocument) return
+    childDocument.document.title = name
     spatializedElement.updateProperties({
       name,
     })
@@ -85,7 +89,11 @@ function SpatializedContent<P extends ElementType>(
   const spatialized2DElement = spatializedElement as Spatialized2DElement
   const { windowProxy } = spatialized2DElement
 
-  useSyncHeadStyles(windowProxy, {
+  // Bitmap mode uses a fake WindowProxy and captures from the root WebView instead.
+  const isAndroidBitmapMode = usesAndroidBitmapCapture()
+
+  // Live window mode needs styles synced just like visionOS.
+  useSyncHeadStyles(isAndroidBitmapMode ? null : windowProxy, {
     subtree: false,
   })
 
@@ -95,12 +103,22 @@ function SpatializedContent<P extends ElementType>(
   const portalInstanceObject: PortalInstanceObject = useContext(
     PortalInstanceContext,
   )!
+
+  if (isAndroidBitmapMode) {
+    return null
+  }
+
+  const childDocument = ensureWindowDocumentStructure(windowProxy)
+  if (!childDocument?.body) {
+    return null
+  }
+
   const JSXPortalInstance = getJSXPortalInstance(
     restProps,
     portalInstanceObject,
   )
 
-  return createPortal(JSXPortalInstance, windowProxy.document.body)
+  return createPortal(JSXPortalInstance, childDocument.body)
 }
 
 function getExtraSpatializedElementProperties(
@@ -126,21 +144,36 @@ function getExtraSpatializedElementProperties(
 
 async function createSpatializedElement() {
   const spatializedElement = await getSession()!.createSpatialized2DElement()
-  const { windowProxy } = spatializedElement
+  const windowProxy = spatializedElement.windowProxy
+
+  // Bitmap mode renders from the root WebView instead of per-element child windows.
+  if (usesAndroidBitmapCapture()) {
+    console.log(
+      '[WebSpatial] Android: Skipping WindowProxy setup, using bitmap capture',
+    )
+    return spatializedElement
+  }
+
+  // VisionOS: Each element gets a real WKWebView, set up its styles
   setOpenWindowStyle(windowProxy)
   await syncParentHeadToChild(windowProxy)
 
-  const viewport = windowProxy.document.querySelector('meta[name="viewport"]')
+  const childDocument = ensureWindowDocumentStructure(windowProxy)
+  if (!childDocument) {
+    return spatializedElement
+  }
+
+  const viewport = childDocument.document.querySelector('meta[name="viewport"]')
   if (viewport) {
     viewport?.setAttribute(
       'content',
       ' initial-scale=1.0, maximum-scale=1.0, user-scalable=no',
     )
   } else {
-    const meta = windowProxy.document.createElement('meta')
+    const meta = childDocument.document.createElement('meta')
     meta.name = 'viewport'
     meta.content = 'initial-scale=1.0, maximum-scale=1.0, user-scalable=no'
-    windowProxy.document.head.appendChild(meta)
+    childDocument.head.appendChild(meta)
   }
 
   return spatializedElement

@@ -1,0 +1,15 @@
+{
+  "name": "androidxr-compatibility-tests",
+  "version": "1.0.0",
+  "description": "CLI testing framework for Android XR WebSpatial compatibility",
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-vm-modules node_modules/vitest/vitest.mjs run",
+    "test:watch": "node --experimental-vm-modules node_modules/vitest/vitest.mjs",
+    "test:coverage": "node --experimental-vm-modules node_modules/vitest/vitest.mjs run --coverage"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.9",
+    "@vitest/coverage-v8": "^3.0.9"
+  }
+}

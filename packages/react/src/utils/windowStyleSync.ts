@@ -1,3 +1,43 @@
+export function ensureWindowDocumentStructure(openedWindow: WindowProxy) {
+  try {
+    const { document } = openedWindow
+    let documentElement = document.documentElement
+    if (!documentElement) {
+      documentElement = document.createElement('html')
+      document.appendChild(documentElement)
+    }
+
+    let head = document.head
+    if (!head) {
+      head = document.createElement('head') as HTMLHeadElement
+      if (documentElement.firstChild) {
+        documentElement.insertBefore(head, documentElement.firstChild)
+      } else {
+        documentElement.appendChild(head)
+      }
+    }
+
+    let body = document.body
+    if (!body) {
+      body = document.createElement('body') as HTMLBodyElement
+      documentElement.appendChild(body)
+    }
+
+    return {
+      document,
+      documentElement,
+      head,
+      body,
+    }
+  } catch (error) {
+    console.warn(
+      '[WebSpatial] Failed to ensure child window document structure',
+      error,
+    )
+    return null
+  }
+}
+
 export function asyncLoadStyleToChildWindow(
   childWindow: WindowProxy,
   link: HTMLLinkElement,
@@ -34,7 +74,12 @@ export function asyncLoadStyleToChildWindow(
         finish(false)
         return
       }
-      childWindow.document.head.appendChild(link)
+      const childDocument = ensureWindowDocumentStructure(childWindow)
+      if (!childDocument) {
+        finish(false)
+        return
+      }
+      childDocument.head.appendChild(link)
     }, 50)
   })
 }
@@ -43,18 +88,21 @@ const WEBSPATIAL_SYNC_ATTR = 'data-webspatial-sync'
 const WEBSPATIAL_SYNC_KEY_ATTR = 'data-webspatial-sync-key'
 
 export function setOpenWindowStyle(openedWindow: WindowProxy) {
-  openedWindow.document.documentElement.style.cssText +=
+  const childDocument = ensureWindowDocumentStructure(openedWindow)
+  if (!childDocument) return
+
+  childDocument.documentElement.style.cssText +=
     document.documentElement.style.cssText
-  openedWindow.document.documentElement.style.backgroundColor = 'transparent'
-  openedWindow.document.body.style.margin = '0px'
+  childDocument.documentElement.style.backgroundColor = 'transparent'
+  childDocument.body.style.margin = '0px'
 
   // openedWindow body's width and height should be set to inline-block to make sure the width and height are correct
-  openedWindow.document.body.style.display = 'inline-block'
-  openedWindow.document.body.style.minWidth = 'auto'
-  openedWindow.document.body.style.minHeight = 'auto'
-  openedWindow.document.body.style.maxWidth = 'fit-content'
-  openedWindow.document.body.style.minWidth = 'fit-content'
-  openedWindow.document.body.style.background = 'transparent'
+  childDocument.body.style.display = 'inline-block'
+  childDocument.body.style.minWidth = 'auto'
+  childDocument.body.style.minHeight = 'auto'
+  childDocument.body.style.maxWidth = 'fit-content'
+  childDocument.body.style.minWidth = 'fit-content'
+  childDocument.body.style.background = 'transparent'
 }
 
 interface SyncController {
@@ -75,7 +123,11 @@ export async function syncParentHeadToChild(childWindow: WindowProxy) {
   const controller = getController(childWindow)
   const version = ++controller.version
   const styleLoadedPromises: Promise<boolean>[] = []
-  const { head } = childWindow.document
+  const childDocument = ensureWindowDocumentStructure(childWindow)
+  if (!childDocument) {
+    return []
+  }
+  const { head } = childDocument
 
   const isCurrent = () => controller.version === version
 
@@ -132,8 +184,7 @@ export async function syncParentHeadToChild(childWindow: WindowProxy) {
   }
 
   // sync className
-  childWindow.document.documentElement.className =
-    document.documentElement.className
+  childDocument.documentElement.className = document.documentElement.className
 
   return Promise.all(styleLoadedPromises)
 }

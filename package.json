@@ -14,6 +14,7 @@
     "xcode": "open packages/visionOS/web-spatial.xcodeproj",
     "androidStudio": "open -a /Applications/Android\\ Studio.app packages/androidXR",
     "adbDevPorts": "adb reverse tcp:35729 tcp:35729 && adb reverse tcp:5173 tcp:5173",
+    "build:nextjs-demo:android": "cd apps/nextjs-demo && pnpm run build:android",
     "test": "concurrently \"pnpm -r --filter '@webspatial/*' run test\" \"tsc -p apps/test-server/tsconfig.json\"",
     "ciTest": "cd tests/ci-test/ && pnpm run test",
     "format": "pnpm -r run format",
