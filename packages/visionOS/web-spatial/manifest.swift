@@ -5,7 +5,10 @@ var pwaManager = PWAManager()
 
 struct PWAManager: Codable {
     var isLocal: Bool = false
-    var start_url: String = "http://localhost:5173/src/static-3d-model"
+
+    var start_url: String = "http://localhost:5173"
+
+//    var start_url: String = "http://localhost:5173/webspatial/avp/materialApiTest"
 
     var scope: String = ""
     var id: String = "com.webspatial.pico"
@@ -63,7 +66,7 @@ struct PWAManager: Codable {
         return url.starts(with: scope)
     }
 
-    // web+spatial://test
+    /// web+spatial://test
     func checkInDeeplink(url: String) -> String {
         var linkUrl: String = url
         for item in protocol_handlers {

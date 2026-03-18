@@ -11,6 +11,13 @@ export interface Vec3 {
 
 export type Point3D = Vec3
 
+export interface Quaternion {
+  x: number
+  y: number
+  z: number
+  w: number
+}
+
 /**
  * Material type for SpatialDiv or HTML document.
  *
@@ -69,10 +76,8 @@ export interface SpatializedElementProperties {
   enableDragStartGesture: boolean
   enableDragGesture: boolean
   enableDragEndGesture: boolean
-  enableRotateStartGesture: boolean
   enableRotateGesture: boolean
   enableRotateEndGesture: boolean
-  enableMagnifyStartGesture: boolean
   enableMagnifyGesture: boolean
   enableMagnifyEndGesture: boolean
   /**
@@ -345,42 +350,56 @@ export class CubeInfo {
 
 export interface SpatialTapEventDetail {
   location3D: Point3D
+  globalLocation3D?: Point3D
 }
 
 export type SpatialTapEvent = CustomEvent<SpatialTapEventDetail>
 
-export interface SpatialDragEventDetail {
-  location3D: Point3D
+export interface SpatialDragStartEventDetail {
   startLocation3D: Point3D
-  translation3D: Vec3
-  predictedEndTranslation3D: Vec3
-  predictedEndLocation3D: Point3D
-  velocity: Size
+  globalLocation3D?: Point3D
 }
+
+export interface SpatialDragEventDetail {
+  translation3D: Vec3
+}
+
+export interface SpatialDragEndEventDetail {}
+
+export type SpatialDragStartEvent = CustomEvent<SpatialDragStartEventDetail>
 
 export type SpatialDragEvent = CustomEvent<SpatialDragEventDetail>
 
-export type SpatialDragEndEvent = SpatialDragEvent
-
+export type SpatialDragEndEvent = CustomEvent<SpatialDragEndEventDetail>
 export interface SpatialRotateEventDetail {
-  rotation: { vector: [number, number, number, number] }
-  startAnchor3D: Vec3
-  startLocation3D: Point3D
+  quaternion: Quaternion
 }
+
+export interface SpatialRotateEndEventDetail {}
 
 export type SpatialRotateEvent = CustomEvent<SpatialRotateEventDetail>
 
-export type SpatialRotateEndEvent = SpatialRotateEvent
+export type SpatialRotateEndEvent = CustomEvent<SpatialRotateEndEventDetail>
 
 export interface SpatialMagnifyEventDetail {
   magnification: number
-  velocity: number
-  startAnchor3D: Vec3
-  startLocation3D: Point3D
 }
+
+export interface SpatialMagnifyEndEventDetail {}
 
 export type SpatialMagnifyEvent = CustomEvent<SpatialMagnifyEventDetail>
 
-export type SpatialMagnifyEndEvent = SpatialMagnifyEvent
+export type SpatialMagnifyEndEvent = CustomEvent<SpatialMagnifyEndEventDetail>
 
 export type SpatialEntityOrReality = SpatialEntity | SpatializedDynamic3DElement
+
+export interface AttachmentEntityOptions {
+  parentEntityId: string
+  position?: [number, number, number]
+  size: { width: number; height: number }
+}
+
+export interface AttachmentEntityUpdateOptions {
+  position?: [number, number, number]
+  size?: { width: number; height: number }
+}

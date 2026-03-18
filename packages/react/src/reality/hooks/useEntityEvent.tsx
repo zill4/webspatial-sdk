@@ -1,5 +1,13 @@
-import React, { useEffect } from 'react'
-import { EntityEventHandler, eventMap } from '../type'
+import React, { useEffect, useRef } from 'react'
+import {
+  EntityEventHandler,
+  eventMap,
+  SpatialDragEntityEvent,
+  SpatialMagnifyEntityEvent,
+  SpatialRotateEntityEvent,
+  SpatialDragStartEntityEvent,
+  SpatialTapEntityEvent,
+} from '../type'
 import { EntityRef } from './useEntityRef'
 import { SpatialEntity } from '@webspatial/core-sdk'
 
@@ -20,6 +28,125 @@ function createEventProxy(ev: any, instance: EntityRef) {
         // Fallback: if origin not set, return current instance
         return instance
       }
+      if (prop === 'bubbles') {
+        return true
+      }
+      if (prop === 'offsetX') {
+        const type = (target as any).type
+        if (type === 'spatialtap') {
+          return (target as SpatialTapEntityEvent).detail?.location3D?.x ?? 0
+        }
+        if (type === 'spatialdragstart') {
+          return (
+            (target as SpatialDragStartEntityEvent).detail?.startLocation3D
+              ?.x ?? 0
+          )
+        }
+        return undefined
+      }
+      if (prop === 'offsetY') {
+        const type = (target as any).type
+        if (type === 'spatialtap') {
+          return (target as SpatialTapEntityEvent).detail?.location3D?.y ?? 0
+        }
+        if (type === 'spatialdragstart') {
+          return (
+            (target as SpatialDragStartEntityEvent).detail?.startLocation3D
+              ?.y ?? 0
+          )
+        }
+        return undefined
+      }
+      if (prop === 'offsetZ') {
+        const type = (target as any).type
+        if (type === 'spatialtap') {
+          return (target as any).detail?.location3D?.z ?? 0
+        }
+        if (type === 'spatialdragstart') {
+          return (target as any).detail?.startLocation3D?.z ?? 0
+        }
+        return undefined
+      }
+      if (prop === 'translationX') {
+        const type = (target as any).type
+        if (type === 'spatialdrag') {
+          return (
+            (target as SpatialDragEntityEvent).detail?.translation3D?.x ?? 0
+          )
+        }
+        return undefined
+      }
+      if (prop === 'translationY') {
+        const type = (target as any).type
+        if (type === 'spatialdrag') {
+          return (
+            (target as SpatialDragEntityEvent).detail?.translation3D?.y ?? 0
+          )
+        }
+        return undefined
+      }
+      if (prop === 'translationZ') {
+        const type = (target as any).type
+        if (type === 'spatialdrag') {
+          return (
+            (target as SpatialDragEntityEvent).detail?.translation3D?.z ?? 0
+          )
+        }
+        return undefined
+      }
+      if (prop === 'quaternion') {
+        const type = (target as any).type
+        if (type === 'spatialrotate') {
+          return (
+            (target as SpatialRotateEntityEvent).detail?.quaternion ?? {
+              x: 0,
+              y: 0,
+              z: 0,
+              w: 1,
+            }
+          )
+        }
+        return undefined
+      }
+      if (prop === 'magnification') {
+        const type = (target as any).type
+        if (type === 'spatialmagnify') {
+          return (
+            (target as SpatialMagnifyEntityEvent).detail?.magnification ?? 1
+          )
+        }
+        return undefined
+      }
+      if (prop === 'clientX') {
+        const type = (target as any).type
+        if (type === 'spatialtap' || type === 'spatialdragstart') {
+          return (
+            (target as SpatialTapEntityEvent).detail?.globalLocation3D?.x ?? 0
+          )
+        }
+
+        return undefined
+      }
+      if (prop === 'clientY') {
+        const type = (target as any).type
+        if (type === 'spatialtap' || type === 'spatialdragstart') {
+          return (
+            (target as SpatialTapEntityEvent).detail?.globalLocation3D?.y ?? 0
+          )
+        }
+
+        return undefined
+      }
+      if (prop === 'clientZ') {
+        const type = (target as any).type
+        if (type === 'spatialtap' || type === 'spatialdragstart') {
+          return (
+            (target as SpatialTapEntityEvent).detail?.globalLocation3D?.z ?? 0
+          )
+        }
+
+        return undefined
+      }
       const val = (target as any)[prop]
       return typeof val === 'function' ? val.bind(target) : val
     },
@@ -30,24 +157,35 @@ type Props = {
   instance: EntityRef
 } & EntityEventHandler
 export const useEntityEvent: React.FC<Props> = ({ instance, ...handlers }) => {
+  const eventsSetRef = useRef<Set<string>>(new Set())
+
   useEffect(() => {
     const entity = instance.entity
     if (!entity) return
 
-    const boundHandlers: (() => void)[] = []
-
     Object.entries(eventMap).forEach(([reactKey, spatialEvent]) => {
+      //  add/update handler
       const handlerFn = (handlers as any)[reactKey]
       if (!handlerFn) return
-
       const wrapped = (ev: any) => handlerFn(createEventProxy(ev, instance))
       entity.addEvent(spatialEvent as any, wrapped)
-      boundHandlers.push(() => entity.removeEvent(spatialEvent as any))
+      eventsSetRef.current.add(reactKey)
     })
-    return () => {
-      boundHandlers.forEach(unbind => unbind())
-    }
+    return () => {}
   }, [instance.entity, ...Object.values(handlers)])
+
+  useEffect(() => {
+    const entity = instance.entity
+    if (!entity) return
+
+    return () => {
+      // remove all
+      for (let x of eventsSetRef.current) {
+        entity.removeEvent(x as any)
+      }
+      eventsSetRef.current.clear()
+    }
+  }, [instance.entity])
 
   return null
 }
