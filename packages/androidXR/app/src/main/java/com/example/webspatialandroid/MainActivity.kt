@@ -3,13 +3,17 @@ package com.example.webspatialandroid
 import android.annotation.SuppressLint
 import android.os.Bundle
 import android.util.Log
+import android.view.ViewGroup
+import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -41,6 +46,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewLightDark
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.xr.compose.platform.LocalSession
 import androidx.xr.compose.platform.LocalSpatialCapabilities
 import androidx.xr.compose.platform.LocalSpatialConfiguration
@@ -62,11 +68,13 @@ import androidx.compose.runtime.remember
 import com.example.webspatialandroid.ui.theme.WebSpatialAndroidTheme
 import com.example.webspatiallib.Console
 import com.example.webspatiallib.CoordinateSpaceMode
+import com.example.webspatiallib.GestureHandler
 import com.example.webspatiallib.NativeWebView
 import com.example.webspatiallib.SpatialEntity
 import com.example.webspatiallib.SpatialWindowComponent
 import com.example.webspatiallib.SpatialWindowContainer
 import com.example.webspatiallib.WindowContainerData
+import java.lang.ref.WeakReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -118,15 +126,11 @@ class MainActivity : ComponentActivity() {
             val session = LocalSession.current
             val spatialConfig = LocalSpatialConfiguration.current
             val isSpatialEnabled = LocalSpatialCapabilities.current.isSpatialUiEnabled
-            Log.d("SpatialDebug", "isSpatialUiEnabled: $isSpatialEnabled, session: $session")
-
             if (isSpatialEnabled) {
                 Subspace {
-                    Log.d("SpatialDebug", "Entering Subspace composable")
                     MySpatialContent(onRequestHomeSpaceMode = { spatialConfig.requestHomeSpaceMode() })
                 }
             } else {
-                Log.d("SpatialDebug", "Using 2D content (spatial UI not enabled)")
                 My2DContent(onRequestFullSpaceMode = { spatialConfig.requestFullSpaceMode() })
             }
         }
@@ -138,31 +142,108 @@ class MainActivity : ComponentActivity() {
 val PANEL_WIDTH_DP = 1280
 val PANEL_HEIGHT_DP = 800
 
+private data class ResolvedSpatialElementPanel(
+    val element: SpatialElementProps,
+    val absoluteClientX: Double,
+    val absoluteClientY: Double,
+    val absoluteBackOffset: Double,
+    val absoluteZIndex: Double,
+    val childWebView: WebView?
+)
+
+private fun resolveSpatialElementPanels(
+    elements: Collection<SpatialElementProps>,
+    rootNativeWebView: NativeWebView?
+): List<ResolvedSpatialElementPanel> {
+    val childrenByParentId = elements
+        .filter { !it.parentId.isNullOrBlank() }
+        .groupBy { it.parentId!! }
+
+    val resolved = mutableListOf<ResolvedSpatialElementPanel>()
+    val visited = mutableSetOf<String>()
+
+    fun visit(
+        element: SpatialElementProps,
+        inheritedClientX: Double,
+        inheritedClientY: Double,
+        inheritedBackOffset: Double,
+        inheritedZIndex: Double
+    ) {
+        if (!visited.add(element.id)) {
+            return
+        }
+
+        val (translationX, translationY, translationZ) = element.getTranslation()
+        val absoluteClientX = inheritedClientX + element.clientX + translationX.toDouble()
+        val absoluteClientY = inheritedClientY + element.clientY + translationY.toDouble()
+        val absoluteBackOffset = inheritedBackOffset + element.backOffset + translationZ.toDouble()
+        val absoluteZIndex = inheritedZIndex + element.zIndex
+        val childWebView = rootNativeWebView?.getChildWebView(element.id)
+        val shouldRender =
+            element.visible &&
+                element.width > 0 &&
+                element.height > 0 &&
+                (childWebView != null || element.shouldRenderAsSpatialPanel())
+
+        if (shouldRender) {
+            resolved += ResolvedSpatialElementPanel(
+                element = element,
+                absoluteClientX = absoluteClientX,
+                absoluteClientY = absoluteClientY,
+                absoluteBackOffset = absoluteBackOffset,
+                absoluteZIndex = absoluteZIndex,
+                childWebView = childWebView
+            )
+        }
+
+        childrenByParentId[element.id]
+            .orEmpty()
+            .sortedBy { it.zIndex + it.backOffset }
+            .forEach { child ->
+                visit(
+                    element = child,
+                    inheritedClientX = absoluteClientX,
+                    inheritedClientY = absoluteClientY,
+                    inheritedBackOffset = absoluteBackOffset,
+                    inheritedZIndex = absoluteZIndex
+                )
+            }
+    }
+
+    elements
+        .filter { it.parentId == null && it.attachedToScene }
+        .sortedBy { it.zIndex + it.backOffset }
+        .forEach { root ->
+            visit(root, 0.0, 0.0, 0.0, 0.0)
+        }
+
+    elements
+        .filter { it.id !in visited && it.parentId == null }
+        .sortedBy { it.zIndex + it.backOffset }
+        .forEach { orphan ->
+            visit(orphan, 0.0, 0.0, 0.0, 0.0)
+        }
+
+    return resolved.sortedBy { it.absoluteZIndex + it.absoluteBackOffset }
+}
+
 @SuppressLint("RestrictedApi")
 @Composable
 fun MySpatialContent(onRequestHomeSpaceMode: () -> Unit) {
     val session = checkNotNull(LocalSession.current)
     val scope = rememberCoroutineScope()
 
-    Log.d("SpatialDebug", "MySpatialContent composing, windowContainers: ${windowContainers.size}")
+    // Store session in holder for CommandManager access
+    XRSessionHolder.setSession(session)
 
     // Observe spatial element state for enable-xr behavior
     val depthOffset by SpatialElementState.panelDepthOffset
     val material by SpatialElementState.panelMaterial
     val spatialElements = SpatialElementState.elements
 
-    // Get elements that should render as separate spatial panels
-    val spatialPanelElements = remember(spatialElements.toMap()) {
-        spatialElements.values.filter { it.shouldRenderAsSpatialPanel() }
-            .sortedBy { it.backOffset } // Render back-to-front
-    }
-
-    Log.d("SpatialDebug", "spatialElements: ${spatialElements.size}, spatialPanelElements: ${spatialPanelElements.size}")
-
     // DEBUG: Test panel OUTSIDE the main SpatialBox using SpatialRow
     // This tests if the issue is with SpatialBox or with panel rendering in general
     if (debugShowTestPanels) {
-        Log.d("SpatialDebug", "Rendering test panels with SpatialRow")
         SpatialRow {
             // Simple test panel - should appear to the left of main content
             SpatialPanel(
@@ -188,9 +269,14 @@ fun MySpatialContent(onRequestHomeSpaceMode: () -> Unit) {
 
     // For every window container, displays its contents
     windowContainers.forEach { c ->
-        Log.d("SpatialDebug", "Rendering window container: ${c.id}")
         // Use SpatialBox to position multiple panels in 3D space
         SpatialBox {
+            val root = c.getEntities().entries.firstOrNull { it.value.coordinateSpace == CoordinateSpaceMode.ROOT }
+            val rootWindowComponent =
+                root?.value?.components?.find { it is SpatialWindowComponent } as? SpatialWindowComponent
+            val rootNativeWebView = rootWindowComponent?.nativeWebView
+            val spatialPanelElements = resolveSpatialElementPanels(spatialElements.values, rootNativeWebView)
+
             // Main WebView panel at Z=0 (the base layer)
             // Note: movable/resizable now use SpatialPanel parameters instead of modifiers in alpha09
             SpatialPanel(
@@ -199,7 +285,6 @@ fun MySpatialContent(onRequestHomeSpaceMode: () -> Unit) {
                     .height(PANEL_HEIGHT_DP.dp)
                     .offset(0.dp, 0.dp, 0.dp)
             ) {
-                val root = c.getEntities().entries.firstOrNull { it.value.coordinateSpace == CoordinateSpaceMode.ROOT }
                 if (root != null) {
                     val wc = root.value.components.find { it is SpatialWindowComponent } as? SpatialWindowComponent
                     if (wc != null) {
@@ -256,18 +341,52 @@ fun MySpatialContent(onRequestHomeSpaceMode: () -> Unit) {
             }
 
             // Create separate SpatialPanels for each spatialized element with depth
-            spatialPanelElements.forEach { element ->
-                key(element.id) {
-                    // Get the NativeWebView for tap forwarding
-                    val root = c.getEntities().entries.firstOrNull { it.value.coordinateSpace == CoordinateSpaceMode.ROOT }
+            spatialPanelElements.forEach { resolvedElement ->
+                key(resolvedElement.element.id) {
+                    val element = resolvedElement.element
+                    // Get the NativeWebView for gesture forwarding
                     val wc = root?.value?.components?.find { it is SpatialWindowComponent } as? SpatialWindowComponent
                     val webView = wc?.nativeWebView
+                    val childWebView = resolvedElement.childWebView
+
+                    // Create gesture handler for this webview
+                    val gestureHandler = remember(webView) {
+                        webView?.let { GestureHandler(WeakReference(it)) }
+                    }
+
+                    // Create gesture callbacks that use GestureHandler
+                    val gestureCallbacks = if (webView != null && gestureHandler != null) {
+                        SpatialGestureCallbacks(
+                            onTap = if (element.enableTapGesture) { x, y ->
+                                webView.simulateClickAt(x, y)
+                                // Also send spatialtap event via GestureHandler
+                                gestureHandler.handleTap(element.id, Triple(x, y, element.backOffset.toFloat()))
+                            } else null,
+                            onDragStart = if (element.enableDragGesture) { x, y ->
+                                gestureHandler.handleDragStart(element.id, Triple(x, y, element.backOffset.toFloat()))
+                            } else null,
+                            onDrag = if (element.enableDragGesture) { x, y, _, _ ->
+                                gestureHandler.handleDrag(element.id, Triple(x, y, element.backOffset.toFloat()))
+                            } else null,
+                            onDragEnd = if (element.enableDragGesture) { _, _ ->
+                                gestureHandler.handleDragEnd(element.id, Triple(0f, 0f, element.backOffset.toFloat()))
+                            } else null,
+                            onRotate = if (element.enableRotateGesture) { x, y, rotation ->
+                                gestureHandler.handleRotate(element.id, rotation, Triple(x, y, element.backOffset.toFloat()))
+                            } else null,
+                            onMagnify = if (element.enableMagnifyGesture) { x, y, scale ->
+                                gestureHandler.handleMagnify(element.id, scale, Triple(x, y, element.backOffset.toFloat()))
+                            } else null
+                        )
+                    } else null
 
                     SpatializedElementPanel(
                         element = element,
-                        onTap = if (webView != null && element.enableTapGesture) { x, y ->
-                            webView.simulateClickAt(x, y)
-                        } else null
+                        absoluteClientX = resolvedElement.absoluteClientX,
+                        absoluteClientY = resolvedElement.absoluteClientY,
+                        absoluteBackOffset = resolvedElement.absoluteBackOffset,
+                        childWebView = childWebView,
+                        gestures = gestureCallbacks
                     )
                 }
             }
@@ -275,7 +394,6 @@ fun MySpatialContent(onRequestHomeSpaceMode: () -> Unit) {
             // DEBUG: Hardcoded test panels to verify SpatialPanel rendering works
             // These panels are independent of web bridge - if they appear, native rendering works
             if (debugShowTestPanels) {
-                Log.d("SpatialDebug", "Inside SpatialBox, rendering test panels with Z offset")
 
                 // Test panel 1: Near (50dp behind main panel)
                 SpatialPanel(
@@ -340,24 +458,42 @@ fun MySpatialContent(onRequestHomeSpaceMode: () -> Unit) {
                     }
                 }
 
-                Log.d("SpatialPanel", "Rendered 3 hardcoded test panels at Z=50dp, 100dp, 200dp")
             }
         }
     }
 }
 
 /**
+ * Gesture callbacks for spatial elements.
+ * All coordinates are in WebView/CSS pixel space.
+ */
+data class SpatialGestureCallbacks(
+    val onTap: ((Float, Float) -> Unit)? = null,
+    val onDragStart: ((Float, Float) -> Unit)? = null,
+    val onDrag: ((Float, Float, Float, Float) -> Unit)? = null, // (x, y, deltaX, deltaY)
+    val onDragEnd: ((Float, Float) -> Unit)? = null,
+    val onRotate: ((Float, Float, Float) -> Unit)? = null, // (x, y, rotationRadians)
+    val onMagnify: ((Float, Float, Float) -> Unit)? = null  // (x, y, scale)
+)
+
+/**
  * Renders a single spatialized element as a SpatialPanel at the correct Z depth.
- * Optionally handles tap gestures and forwards them to the WebView.
+ * Handles tap, drag, rotate, and magnify gestures and forwards them to the WebView.
  *
  * @param element The spatial element properties
  * @param onTap Optional callback for tap events with (webViewX, webViewY) coordinates
+ * @param gestures Full gesture callbacks (takes precedence over onTap if provided)
  */
 @SuppressLint("RestrictedApi")
 @Composable
 fun SpatializedElementPanel(
     element: SpatialElementProps,
-    onTap: ((Float, Float) -> Unit)? = null
+    absoluteClientX: Double = element.clientX,
+    absoluteClientY: Double = element.clientY,
+    absoluteBackOffset: Double = element.backOffset,
+    childWebView: WebView? = null,
+    onTap: ((Float, Float) -> Unit)? = null,
+    gestures: SpatialGestureCallbacks? = null
 ) {
     // Get density for coordinate conversion
     val density = LocalDensity.current
@@ -369,19 +505,19 @@ fun SpatializedElementPanel(
     val widthDp = (element.width * pxToDp).dp
     val heightDp = (element.height * pxToDp).dp
 
-    // Debug logging to verify panel creation
-    val zOffsetDpValue = element.getDepthDp()
-    Log.d("SpatialPanel", "Rendering: ${element.id} at Z=${element.backOffset} -> ${zOffsetDpValue}dp, size=${element.width.toInt()}x${element.height.toInt()}, hasBitmap=${element.hasBitmapContent()}")
-
     // Calculate position offset from panel center
     // clientX/Y are from top-left of WebView, we need offset from center
-    val centerOffsetX = ((element.clientX + element.width / 2) - PANEL_WIDTH_DP / 2).dp
-    val centerOffsetY = -((element.clientY + element.height / 2) - PANEL_HEIGHT_DP / 2).dp // Flip Y axis
+    val centerOffsetX = ((absoluteClientX + element.width / 2) - PANEL_WIDTH_DP / 2).dp
+    val centerOffsetY = -((absoluteClientY + element.height / 2) - PANEL_HEIGHT_DP / 2).dp // Flip Y axis
 
     // Z offset: negative = towards viewer (backOffset is positive for "behind")
     // In our coordinate system, we want elements with backOffset to be BEHIND the main panel
     // So we use positive Z to push them back
-    val zOffsetDp = element.getDepthDp().dp
+    val zOffsetDp = (if (absoluteBackOffset > 0.0) {
+        maxOf(absoluteBackOffset.toFloat(), 20f)
+    } else {
+        absoluteBackOffset.toFloat()
+    }).dp
 
     val cornerRadiusDp = element.cornerRadius.dp
 
@@ -399,12 +535,15 @@ fun SpatializedElementPanel(
                 .fillMaxSize()
                 .clip(RoundedCornerShape(cornerRadiusDp))
                 .background(
+                    // When we have a bitmap with transparent areas, we need a solid background
+                    // to prevent seeing through to the black XR void
                     when (element.backgroundMaterial) {
                         "translucent" -> Color(0x88334466)
                         "thin" -> Color(0x44556677)
                         "thick" -> Color(0xCC223344)
                         "regular" -> Color(0x99445566)
-                        "transparent" -> Color.Transparent
+                        "transparent" -> if (element.hasBitmapContent()) Color(0xFF1a1a2e) else Color.Transparent
+                        "none" -> if (childWebView != null) Color.Transparent else Color(0xFF1a1a2e)
                         else -> Color(0xFF1a1a2e) // Default dark background
                     }
                 )
@@ -413,29 +552,98 @@ fun SpatializedElementPanel(
                         Modifier.border(2.dp, Color(0xFF4ade80), RoundedCornerShape(cornerRadiusDp))
                     } else Modifier
                 )
+                // Add tap gesture handling
                 .then(
-                    // Add tap gesture handling if callback is provided and element has tap enabled
-                    if (onTap != null && element.enableTapGesture) {
-                        Modifier.pointerInput(element.id) {
+                    if (
+                        childWebView == null &&
+                        (onTap != null || gestures?.onTap != null) &&
+                        element.enableTapGesture
+                    ) {
+                        Modifier.pointerInput(element.id + "_tap") {
                             detectTapGestures { offset ->
-                                // Convert tap offset (in px) to WebView coordinates
-                                // offset is relative to the panel, need to translate to WebView space
-                                val webViewX = element.clientX + (offset.x / density.density)
-                                val webViewY = element.clientY + (offset.y / density.density)
-                                Log.d("SpatialPanel", "Tap detected on ${element.id} at panel(${offset.x}, ${offset.y}) -> webView($webViewX, $webViewY)")
-                                onTap(webViewX.toFloat(), webViewY.toFloat())
+                                val webViewX = absoluteClientX + (offset.x / density.density)
+                                val webViewY = absoluteClientY + (offset.y / density.density)
+                                (gestures?.onTap ?: onTap)?.invoke(webViewX.toFloat(), webViewY.toFloat())
+                            }
+                        }
+                    } else Modifier
+                )
+                // Add drag gesture handling
+                .then(
+                    if (childWebView == null && gestures != null && element.enableDragGesture) {
+                        Modifier.pointerInput(element.id + "_drag") {
+                            detectDragGestures(
+                                onDragStart = { offset ->
+                                    val webViewX = absoluteClientX + (offset.x / density.density)
+                                    val webViewY = absoluteClientY + (offset.y / density.density)
+                                    gestures.onDragStart?.invoke(webViewX.toFloat(), webViewY.toFloat())
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val webViewX = absoluteClientX + (change.position.x / density.density)
+                                    val webViewY = absoluteClientY + (change.position.y / density.density)
+                                    val deltaX = dragAmount.x / density.density
+                                    val deltaY = dragAmount.y / density.density
+                                    gestures.onDrag?.invoke(webViewX.toFloat(), webViewY.toFloat(), deltaX, deltaY)
+                                },
+                                onDragEnd = {
+                                    // Note: We don't have final position here, use (0,0) as placeholder
+                                    gestures.onDragEnd?.invoke(0f, 0f)
+                                }
+                            )
+                        }
+                    } else Modifier
+                )
+                // Add rotate and magnify (pinch) gesture handling
+                .then(
+                    if (
+                        childWebView == null &&
+                        gestures != null &&
+                        (element.enableRotateGesture || element.enableMagnifyGesture)
+                    ) {
+                        Modifier.pointerInput(element.id + "_transform") {
+                            detectTransformGestures { centroid, _, zoom, rotation ->
+                                val webViewX = absoluteClientX + (centroid.x / density.density)
+                                val webViewY = absoluteClientY + (centroid.y / density.density)
+
+                                if (element.enableRotateGesture && rotation != 0f) {
+                                    gestures.onRotate?.invoke(webViewX.toFloat(), webViewY.toFloat(), rotation)
+                                }
+
+                                if (element.enableMagnifyGesture && zoom != 1f) {
+                                    gestures.onMagnify?.invoke(webViewX.toFloat(), webViewY.toFloat(), zoom)
+                                }
                             }
                         }
                     } else Modifier
                 )
         ) {
-            if (bitmap != null) {
+            if (childWebView != null) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { _ ->
+                        if (childWebView.parent is ViewGroup) {
+                            (childWebView.parent as ViewGroup).removeView(childWebView)
+                        }
+                        childWebView.apply {
+                            layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                            setBackgroundColor(Color.Transparent.toArgb())
+                        }
+                    },
+                )
+            } else if (bitmap != null) {
                 // Render captured bitmap
+                // Use FillBounds to stretch the image to fill the panel exactly
+                // This ensures the bitmap fills the entire panel area without letterboxing
                 Image(
                     bitmap = bitmap.asImageBitmap(),
                     contentDescription = "Spatial element ${element.id}",
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit
+                    contentScale = ContentScale.FillBounds,
+                    alignment = androidx.compose.ui.Alignment.TopStart
                 )
             } else {
                 // Placeholder - show element info when no bitmap available

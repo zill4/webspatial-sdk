@@ -48,7 +48,6 @@ class GestureHandler(
         val element = SpatialObject.get(elementId) as? Spatialized2DElement
 
         if (element?.enableTapGesture == true) {
-            Log.d(TAG, "Sending tap event to $elementId at $location3D")
             WebMsg.sendTapEvent(webview, elementId, location3D)
         }
     }
@@ -66,7 +65,6 @@ class GestureHandler(
             dragStartLocation = location3D
             lastDragLocation = location3D
 
-            Log.d(TAG, "Drag started on $elementId at $location3D")
             WebMsg.sendDragStartEvent(webview, elementId, location3D)
         }
     }
@@ -92,7 +90,6 @@ class GestureHandler(
                 location3D.third - startLoc.third
             )
 
-            Log.d(TAG, "Drag update on $elementId: translation=$translation")
             WebMsg.sendDragEvent(webview, elementId, location3D, startLoc, translation)
             lastDragLocation = location3D
         }
@@ -115,7 +112,6 @@ class GestureHandler(
                 location3D.third - startLoc.third
             )
 
-            Log.d(TAG, "Drag ended on $elementId: translation=$translation")
             WebMsg.sendDragEndEvent(webview, elementId, location3D, translation)
         }
 
@@ -139,7 +135,6 @@ class GestureHandler(
             rotationStartAngle = rotation
             lastRotationAngle = rotation
 
-            Log.d(TAG, "Rotate started on $elementId: angle=$rotation")
             WebMsg.sendRotateEvent(webview, elementId, "spatialrotatestart", rotation, location3D)
         }
     }
@@ -160,7 +155,6 @@ class GestureHandler(
             // Send delta rotation since start
             val deltaRotation = rotation - rotationStartAngle
 
-            Log.d(TAG, "Rotate update on $elementId: angle=$deltaRotation")
             WebMsg.sendRotateEvent(webview, elementId, "spatialrotate", deltaRotation, location3D)
             lastRotationAngle = rotation
         }
@@ -178,7 +172,6 @@ class GestureHandler(
         if (element?.enableRotateEndGesture == true || element?.enableRotateGesture == true) {
             val deltaRotation = rotation - rotationStartAngle
 
-            Log.d(TAG, "Rotate ended on $elementId: angle=$deltaRotation")
             WebMsg.sendRotateEvent(webview, elementId, "spatialrotateend", deltaRotation, location3D)
         }
 
@@ -201,7 +194,6 @@ class GestureHandler(
             magnifyTargetId = elementId
             lastMagnification = magnification
 
-            Log.d(TAG, "Magnify started on $elementId: scale=$magnification")
             WebMsg.sendMagnifyEvent(webview, elementId, "spatialmagnifystart", magnification, location3D)
         }
     }
@@ -219,7 +211,6 @@ class GestureHandler(
 
         val element = SpatialObject.get(elementId) as? Spatialized2DElement
         if (element?.enableMagnifyGesture == true) {
-            Log.d(TAG, "Magnify update on $elementId: scale=$magnification")
             WebMsg.sendMagnifyEvent(webview, elementId, "spatialmagnify", magnification, location3D)
             lastMagnification = magnification
         }
@@ -235,7 +226,6 @@ class GestureHandler(
 
         val element = SpatialObject.get(elementId) as? Spatialized2DElement
         if (element?.enableMagnifyEndGesture == true || element?.enableMagnifyGesture == true) {
-            Log.d(TAG, "Magnify ended on $elementId: scale=$magnification")
             WebMsg.sendMagnifyEvent(webview, elementId, "spatialmagnifyend", magnification, location3D)
         }
 

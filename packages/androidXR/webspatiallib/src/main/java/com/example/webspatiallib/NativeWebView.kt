@@ -135,9 +135,7 @@ class NativeWebView {
             try {
                 // Format: {id: "rId_1", data: {success: true, data: actualData}}
                 val callback = "window.__SpatialWebEvent && window.__SpatialWebEvent({id:'$requestID', data: {success: $success, data: $data}})"
-                webView.evaluateJavascript(callback) { result ->
-                    Log.d("WebSpatial", "Callback sent for $requestID")
-                }
+                webView.evaluateJavascript(callback) { _ -> }
             } catch (e: Exception) {
                 Log.e("WebSpatial", "Exception during callback: ${e.message}")
             }
@@ -211,7 +209,6 @@ class NativeWebView {
         // Add "WebSpatial/" to user agent so SDK detects this as a spatial environment
         val defaultUserAgent = webView.settings.userAgentString
         webView.settings.userAgentString = "$defaultUserAgent WebSpatial/${BuildConfig.NATIVE_VERSION}"
-        Log.d("WebSpatial", "User agent set: ${webView.settings.userAgentString}")
 
         val nWebView = this;
 
@@ -245,7 +242,10 @@ class NativeWebView {
              */
             @JavascriptInterface
             fun postMessage(requestID: String, command: String, message: String): String {
-                Log.d("WebSpatial", "Bridge received: $command (id: $requestID)")
+                // Log large messages (likely contain bitmap data)
+                if (message.length > 10000) {
+                    Log.i("WebSpatial", "postMessage: $command with ${message.length / 1024}KB payload")
+                }
 
                 // Build the full message JSON that CommandManager expects
                 val fullMessage = buildJsonMessage(requestID, command, message)
@@ -253,6 +253,11 @@ class NativeWebView {
 
                 // Return empty string - all commands are async via __SpatialWebEvent callback
                 return ""
+            }
+
+            @JavascriptInterface
+            fun getRenderMode(): String {
+                return "live-window"
             }
 
             /**
@@ -265,8 +270,6 @@ class NativeWebView {
              */
             @JavascriptInterface
             fun createSpatialElement(elementId: String, command: String, message: String): String {
-                Log.d("WebSpatial", "createSpatialElement: id=$elementId, command=$command")
-
                 try {
                     // Parse parameters
                     val json = Json.parseToJsonElement(message).jsonObject
@@ -277,19 +280,12 @@ class NativeWebView {
 
                     // Notify callback to create the element
                     val callback = spatialElementCreatedCallback
-                    Log.d("WebSpatial", "createSpatialElement callback is ${if (callback != null) "SET" else "NULL"}")
 
                     Handler(Looper.getMainLooper()).post {
-                        Log.d("WebSpatial", "createSpatialElement invoking callback for $elementId")
                         try {
-                            if (callback != null) {
-                                callback.onSpatialElementCreated(elementId, command, params)
-                                Log.d("WebSpatial", "createSpatialElement callback completed for $elementId")
-                            } else {
-                                Log.w("WebSpatial", "createSpatialElement callback was null!")
-                            }
+                            callback?.onSpatialElementCreated(elementId, command, params)
                         } catch (e: Exception) {
-                            Log.e("WebSpatial", "createSpatialElement callback FAILED for $elementId: ${e.message}", e)
+                            Log.e("WebSpatial", "createSpatialElement failed: ${e.message}", e)
                         }
                     }
 
@@ -309,10 +305,8 @@ class NativeWebView {
                 request: WebResourceRequest?
             ): WebResourceResponse? {
                 request?.let {
-                    Log.d("WebSpatial", "Intercepting request: ${it.url}")
                     val response = assetLoader.shouldInterceptRequest(it.url)
                     if (response != null) {
-                        Log.d("WebSpatial", "Serving via AssetLoader: ${it.url}")
                         return response
                     }
                 }
@@ -388,38 +382,63 @@ class NativeWebView {
                 isUserGesture: Boolean,
                 resultMsg: Message?
             ): Boolean {
-                Log.d("WebSpatial", "onCreateWindow called, isDialog=$isDialog, isUserGesture=$isUserGesture")
-
                 if (view == null || resultMsg == null) {
-                    Log.w("WebSpatial", "onCreateWindow: view or resultMsg is null")
                     return false
                 }
 
-                // Generate element ID upfront
-                val elementId = "spatial_${UUID.randomUUID().toString().take(8)}"
+                // Generate an ID upfront, but prefer the JS-provided one when available.
+                var elementId = "spatial_${UUID.randomUUID().toString().take(8)}"
 
                 // Create a child WebView for this spatial element
                 val childWebView = WebView(view.context)
                 childWebView.settings.javaScriptEnabled = true
+                childWebView.settings.domStorageEnabled = true
+                childWebView.settings.allowFileAccess = true
+                childWebView.settings.allowContentAccess = true
 
                 // Track pending webspatial URL for this child WebView
                 var pendingCommand: String? = null
                 var pendingParams: Map<String, String>? = null
+                val childWindowUrl = "${getAssetLoaderBaseUrl()}spatial-child.html"
+
+                fun updateChildWebViewId(newId: String) {
+                    if (newId == elementId) {
+                        return
+                    }
+                    spatialChildWebViews.remove(elementId)
+                    elementId = newId
+                    spatialChildWebViews[elementId] = childWebView
+                }
 
                 childWebView.webViewClient = object : WebViewClient() {
+                    override fun shouldInterceptRequest(
+                        view: WebView?,
+                        request: WebResourceRequest?,
+                    ): WebResourceResponse? {
+                        request?.let {
+                            val response = assetLoader.shouldInterceptRequest(it.url)
+                            if (response != null) {
+                                return response
+                            }
+                        }
+                        return super.shouldInterceptRequest(view, request)
+                    }
+
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                         val url = request?.url?.toString() ?: return false
-                        Log.d("WebSpatial", "Child WebView URL loading: $url")
 
                         // Check if this is a webspatial:// URL
                         if (url.startsWith("webspatial://")) {
                             val parsed = parseWebSpatialUrl(url)
                             pendingCommand = parsed.first
                             pendingParams = parsed.second
-                            Log.d("WebSpatial", "Parsed webspatial:// URL: command=${parsed.first}")
+                            parsed.second["id"]?.let { requestedId ->
+                                updateChildWebViewId(requestedId)
+                            }
 
-                            // Load about:blank to make the WebView "ready"
-                            view?.loadUrl("about:blank")
+                            // Load a same-origin blank page so the parent WebView can
+                            // access child.document without hitting cross-origin errors.
+                            view?.loadUrl(childWindowUrl)
                             return true
                         }
                         return false
@@ -428,13 +447,15 @@ class NativeWebView {
                     @Deprecated("Deprecated in Java")
                     override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                         url?.let {
-                            Log.d("WebSpatial", "Child WebView URL loading (legacy): $it")
                             if (it.startsWith("webspatial://")) {
                                 val parsed = parseWebSpatialUrl(it)
                                 pendingCommand = parsed.first
                                 pendingParams = parsed.second
+                                parsed.second["id"]?.let { requestedId ->
+                                    updateChildWebViewId(requestedId)
+                                }
 
-                                view?.loadUrl("about:blank")
+                                view?.loadUrl(childWindowUrl)
                                 return true
                             }
                         }
@@ -443,24 +464,29 @@ class NativeWebView {
 
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
-                        Log.d("WebSpatial", "Child WebView page finished: $url, elementId=$elementId")
 
-                        // Inject __SpatialId after page loads (whether about:blank or anything else)
+                        // Mark the child surface ready only after the real same-origin
+                        // placeholder page has finished loading. This avoids handing the
+                        // SDK an about:blank proxy that will be replaced moments later.
                         val injectScript = """
                             window.__SpatialId = '$elementId';
-                            console.log('[WebSpatial] Child window ready, __SpatialId: $elementId');
+                            window.__WebSpatialChildReady = true;
+                            window.__WebSpatialAndroidConfig = { renderMode: 'live-window' };
+                            if (document.documentElement) {
+                                document.documentElement.dataset.webspatialChildReady = 'true';
+                            }
+                            if (document.body) {
+                                document.body.dataset.webspatialChildReady = 'true';
+                            }
                         """.trimIndent()
 
-                        view?.evaluateJavascript(injectScript) { result ->
-                            Log.d("WebSpatial", "Injected __SpatialId=$elementId (result: $result)")
-                        }
+                        view?.evaluateJavascript(injectScript) { _ -> }
 
                         // Create the spatial element when webspatial:// command was received
                         pendingCommand?.let { cmd ->
                             spatialElementCreatedCallback?.onSpatialElementCreated(
                                 elementId, cmd, pendingParams ?: emptyMap()
                             )
-                            Log.i("WebSpatial", "Created spatial element: id=$elementId, command=$cmd")
                             pendingCommand = null
                             pendingParams = null
                         }
@@ -475,7 +501,6 @@ class NativeWebView {
                 if (transport != null) {
                     transport.webView = childWebView
                     resultMsg.sendToTarget()
-                    Log.d("WebSpatial", "WebView transport sent for elementId=$elementId")
                     return true
                 }
 
@@ -539,7 +564,7 @@ class NativeWebView {
             }
             fullJson.toString()
         } catch (e: Exception) {
-            Log.e("WebSpatial", "Error building message: ${e.message}")
+            Log.e("WebSpatial", "Error building message for $command (${message.length} chars): ${e.message}")
             """{"requestID":"$requestID","command":"$command","data":{}}"""
         }
     }
@@ -555,7 +580,6 @@ class NativeWebView {
                 val ci = getCommandInfo(json.jsonObject)
                 if (ci != null) {
                     NativeWebView.commandManager.processCommand(this, ci)
-                    Log.d("WebSpatial", "Processing command: ${ci.command}")
                 }
             } catch (e: Exception) {
                 Log.e("WebSpatial", "Error processing message: ${e.message}")
@@ -572,6 +596,9 @@ class NativeWebView {
             (function() {
                 window.WebSpatailNativeVersion = '${BuildConfig.NATIVE_VERSION}';
                 window.WebSpatailEnabled = true;
+                window.__WebSpatialAndroidConfig = {
+                    renderMode: 'live-window'
+                };
 
                 // Map to track spatial elements created via window.open
                 window.__spatialElements = window.__spatialElements || {};
@@ -582,9 +609,6 @@ class NativeWebView {
                 // Override window.open to handle webspatial:// URLs
                 window.open = function(url, target, features) {
                     if (url && url.startsWith('webspatial://')) {
-                        console.log('[WebSpatial] Intercepting window.open for: ' + url);
-
-                        // Parse the webspatial:// URL
                         const parsed = new URL(url);
                         const command = parsed.hostname;
                         const params = {};
@@ -592,11 +616,49 @@ class NativeWebView {
                             params[key] = value;
                         });
 
-                        // Generate element ID
-                        const elementId = 'spatial_' + Math.random().toString(36).substr(2, 8);
+                        // Send command to native via bridge
+                        const message = JSON.stringify({
+                            command: command,
+                            elementId: params.id || ('spatial_' + Math.random().toString(36).substr(2, 8)),
+                            params: params
+                        });
 
-                        // Create a fake window object that the SDK can interact with
-                        // Must have document.body.innerHTML for SDK compatibility
+                        // Handle different webspatial commands
+                        if (command === 'createSpatialScene') {
+                            // For scene creation, we need to call the JSB command directly
+                            // The URL and config are in the params
+                            const sceneMessage = JSON.stringify({
+                                id: params.id || ('spatial_' + Math.random().toString(36).substr(2, 8)),
+                                url: params.url,
+                                config: params.config ? JSON.parse(params.config) : null
+                            });
+
+                            // Use postMessage for scene creation
+                            if (window.webspatialBridge && window.webspatialBridge.postMessage) {
+                                const requestId = 'rId_scene_' + Math.random().toString(36).substr(2, 8);
+                                window.webspatialBridge.postMessage(requestId, 'CreateSpatialScene', sceneMessage);
+                            }
+                            return null;
+                        }
+
+                        // Use a real child WebView when available so Android XR can render
+                        // spatialized elements as live surfaces instead of bitmap snapshots.
+                        try {
+                            const childWindow = originalWindowOpen(url, target, features);
+                            if (childWindow) {
+                                if (params.id) {
+                                    try {
+                                        childWindow.__SpatialId = params.id;
+                                    } catch (e) {}
+                                }
+                                return childWindow;
+                            }
+                        } catch (e) {
+                            console.warn('[WebSpatial] child window open failed, falling back to bridge mode', e);
+                        }
+
+                        // Fallback to the legacy bridge-backed fake window if child windows fail.
+                        const elementId = params.id || ('spatial_' + Math.random().toString(36).substr(2, 8));
                         const fakeDocument = {
                             body: {
                                 innerHTML: '',
@@ -628,7 +690,7 @@ class NativeWebView {
                         };
 
                         const fakeWindow = {
-                            __SpatialId: null,
+                            __SpatialId: elementId,
                             closed: false,
                             document: fakeDocument,
                             location: { href: 'about:blank' },
@@ -636,9 +698,7 @@ class NativeWebView {
                             focus: function() {},
                             blur: function() {},
                             postMessage: function() {},
-                            // The SDK checks for this method to know the window is "ready"
                             open: function(newUrl, newTarget) {
-                                console.log('[WebSpatial] fakeWindow.open called: ' + newUrl);
                                 if (newUrl) {
                                     this.location.href = newUrl;
                                 }
@@ -646,27 +706,11 @@ class NativeWebView {
                             }
                         };
 
-                        // Store for lookup
                         window.__spatialElements[elementId] = fakeWindow;
 
-                        // Send command to native via bridge
-                        const message = JSON.stringify({
-                            command: command,
-                            elementId: elementId,
-                            params: params
-                        });
-
-                        // Use the bridge to create the element
                         if (window.webspatialBridge && window.webspatialBridge.createSpatialElement) {
-                            const result = window.webspatialBridge.createSpatialElement(elementId, command, message);
-                            console.log('[WebSpatial] createSpatialElement result: ' + result);
+                            window.webspatialBridge.createSpatialElement(elementId, command, message);
                         }
-
-                        // Inject __SpatialId after a small delay to simulate async creation
-                        setTimeout(function() {
-                            fakeWindow.__SpatialId = elementId;
-                            console.log('[WebSpatial] Set __SpatialId on fakeWindow: ' + elementId);
-                        }, 16);
 
                         return fakeWindow;
                     }
@@ -675,14 +719,10 @@ class NativeWebView {
                     return originalWindowOpen(url, target, features);
                 };
 
-                console.log('[WebSpatial] Android XR bridge initialized, version: ${BuildConfig.NATIVE_VERSION}');
-                console.log('[WebSpatial] window.open interceptor installed');
             })();
         """.trimIndent()
 
-        webView.evaluateJavascript(script) { result ->
-            Log.d("WebSpatial", "Globals and window.open interceptor injected")
-        }
+        webView.evaluateJavascript(script) { _ -> }
     }
 
     fun navigateToURL(url: String) {

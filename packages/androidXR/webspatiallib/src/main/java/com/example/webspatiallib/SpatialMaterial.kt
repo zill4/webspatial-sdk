@@ -92,12 +92,40 @@ class UnlitMaterial(
 }
 
 /**
- * Physical-based rendering material (future).
+ * Physical-based rendering material with PBR properties.
+ * Mirrors visionOS PhysicallyBasedMaterial.
  */
 class PhysicalMaterial(
     val baseColor: Int = Color.WHITE,
     val metallic: Float = 0f,
-    val roughness: Float = 0.5f
+    val roughness: Float = 0.5f,
+    val baseColorTextureId: String? = null,
+    val normalTextureId: String? = null,
+    val metallicRoughnessTextureId: String? = null
 ) : SpatialMaterial() {
     override val materialType = "physical"
+
+    init {
+        Log.d(TAG, "Created PhysicalMaterial: color=${Integer.toHexString(baseColor)}, metallic=$metallic, roughness=$roughness")
+    }
+
+    companion object {
+        fun create(
+            colorString: String? = null,
+            metallic: Float = 0f,
+            roughness: Float = 0.5f,
+            baseColorTextureId: String? = null,
+            normalTextureId: String? = null,
+            metallicRoughnessTextureId: String? = null
+        ): PhysicalMaterial {
+            return PhysicalMaterial(
+                baseColor = parseColor(colorString),
+                metallic = metallic,
+                roughness = roughness,
+                baseColorTextureId = baseColorTextureId,
+                normalTextureId = normalTextureId,
+                metallicRoughnessTextureId = metallicRoughnessTextureId
+            )
+        }
+    }
 }

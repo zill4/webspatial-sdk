@@ -109,6 +109,7 @@
      [K in keyof ReactJSXIntrinsicElements]: ReactJSXIntrinsicElements[K] & {
        style?: React.CSSProperties
        'enable-xr'?: boolean
+       'enable-xr-monitor'?: boolean
        onSpatialTap?: (e: SpatialTapEvent) => void
        onSpatialDragStart?: (e: SpatialDragStartEvent) => void
        onSpatialDrag?: (e: SpatialDragEvent) => void

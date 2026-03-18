@@ -31,6 +31,87 @@ function uuid(): string {
   })
 }
 
+function supportsLiveWindowProxyMode(): boolean {
+  return (window as any).__WebSpatialAndroidConfig?.renderMode === 'live-window'
+}
+
+function appendQueryParam(
+  query: string | undefined,
+  key: string,
+  value: string,
+): string {
+  const prefix = query && query.length > 0 ? `${query}&` : ''
+  return `${prefix}${key}=${encodeURIComponent(value)}`
+}
+
+function isWindowDocumentReady(windowProxy: WindowProxy): boolean {
+  const childWindow = windowProxy as WindowProxy & {
+    __WebSpatialChildReady?: boolean
+  }
+
+  const href = childWindow.location?.href
+  if (!href || href.startsWith('about:')) {
+    return false
+  }
+
+  const document = childWindow.document
+  if (!document?.head || !document.body) {
+    return false
+  }
+
+  if (
+    document.readyState !== 'interactive' &&
+    document.readyState !== 'complete'
+  ) {
+    return false
+  }
+
+  return childWindow.__WebSpatialChildReady === true
+}
+
+function hasWindowDocumentStructure(windowProxy: WindowProxy): boolean {
+  const href = windowProxy.location?.href
+  if (!href || href.startsWith('about:')) {
+    return false
+  }
+
+  const document = windowProxy.document
+  return Boolean(document?.head && document.body)
+}
+
+async function waitForWindowDocument(
+  windowProxy: WindowProxy,
+  timeoutMs: number = 8000,
+): Promise<boolean> {
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      if (isWindowDocumentReady(windowProxy)) {
+        return true
+      }
+    } catch {
+      // Child WebView is still navigating to its same-origin placeholder.
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 16))
+  }
+
+  try {
+    if (hasWindowDocumentStructure(windowProxy)) {
+      console.warn(
+        '[AndroidPlatform] Falling back to partially ready child window after timeout',
+        windowProxy.location?.href,
+      )
+      return true
+    }
+  } catch {
+    // Ignore post-timeout access failures.
+  }
+
+  return false
+}
+
 /**
  * Creates a fake WindowProxy that satisfies the SDK interface for Android.
  * On visionOS, each spatialized element gets its own WKWebView.
@@ -219,6 +300,41 @@ export class AndroidPlatform implements PlatformAbility {
     target?: string,
     features?: string,
   ): Promise<CommandResult> {
+    if (
+      command === 'createSpatialized2DElement' &&
+      supportsLiveWindowProxyMode()
+    ) {
+      const elementId = uuid()
+      const windowProxy = window.open(
+        `webspatial://${command}?${appendQueryParam(query, 'id', elementId)}`,
+        target,
+        features,
+      )
+
+      if (!windowProxy) {
+        return CommandResultFailure(
+          'WindowOpenFailed',
+          `Unable to open child window for ${command}`,
+        )
+      }
+
+      try {
+        ;(windowProxy as any).__SpatialId = elementId
+      } catch {
+        // Some WebView implementations expose a read-only proxy object at first.
+      }
+
+      const windowReady = await waitForWindowDocument(windowProxy)
+      if (!windowReady) {
+        return CommandResultFailure(
+          'WindowProxyUnavailable',
+          `Timed out waiting for ${command} child window to become scriptable`,
+        )
+      }
+
+      return CommandResultSuccess({ windowProxy, id: elementId })
+    }
+
     // Android approach: Use direct JSB commands instead of window.open
     // This bypasses the polling mechanism and fake window complexity
 
@@ -284,6 +400,33 @@ export class AndroidPlatform implements PlatformAbility {
     target?: string,
     features?: string,
   ): CommandResult {
+    if (
+      command === 'createSpatialized2DElement' &&
+      supportsLiveWindowProxyMode()
+    ) {
+      const elementId = uuid()
+      const windowProxy = window.open(
+        `webspatial://${command}?${appendQueryParam(query, 'id', elementId)}`,
+        target,
+        features,
+      )
+
+      if (!windowProxy) {
+        return CommandResultFailure(
+          'WindowOpenFailed',
+          `Unable to open child window for ${command}`,
+        )
+      }
+
+      try {
+        ;(windowProxy as any).__SpatialId = elementId
+      } catch {
+        // Some WebView implementations expose a read-only proxy object at first.
+      }
+
+      return CommandResultSuccess({ windowProxy, id: elementId })
+    }
+
     // For sync calls, generate ID and create fake windowProxy immediately
     // Note: The native element creation happens async via the bridge callback
     const elementId = uuid()

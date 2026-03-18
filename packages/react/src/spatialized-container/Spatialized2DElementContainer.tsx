@@ -22,7 +22,9 @@ import {
 import { Spatialized2DElement } from '@webspatial/core-sdk'
 import { createPortal } from 'react-dom'
 import { getInheritedStyleProps, parseCornerRadius } from './utils'
-import { isAndroidPlatform } from '../utils/androidBitmapCapture'
+import {
+  usesAndroidBitmapCapture,
+} from '../utils/androidBitmapCapture'
 
 function asyncLoadStyleToChildWindow(
   childWindow: WindowProxy,
@@ -45,27 +47,82 @@ function asyncLoadStyleToChildWindow(
     // need to wait for some time to make sure the style is loaded
     // otherwise, the style may not be applied
     setTimeout(() => {
-      childWindow.document.head.appendChild(n)
+      const childDocument = ensureWindowDocumentStructure(childWindow)
+      if (!childDocument) {
+        resolve(false)
+        return
+      }
+      childDocument.head.appendChild(n)
     }, 50)
   })
 }
 
+function ensureWindowDocumentStructure(openedWindow: WindowProxy) {
+  try {
+    const document = openedWindow.document
+    let documentElement = document.documentElement
+    if (!documentElement) {
+      documentElement = document.createElement('html')
+      document.appendChild(documentElement)
+    }
+
+    let head = document.head
+    if (!head) {
+      head = document.createElement('head') as HTMLHeadElement
+      if (documentElement.firstChild) {
+        documentElement.insertBefore(head, documentElement.firstChild)
+      } else {
+        documentElement.appendChild(head)
+      }
+    }
+
+    let body = document.body
+    if (!body) {
+      body = document.createElement('body') as HTMLBodyElement
+      documentElement.appendChild(body)
+    }
+
+    return {
+      document,
+      documentElement,
+      head,
+      body,
+    }
+  } catch (error) {
+    console.warn(
+      '[WebSpatial] Failed to ensure child window document structure',
+      error,
+    )
+    return null
+  }
+}
+
 function setOpenWindowStyle(openedWindow: WindowProxy) {
-  openedWindow!.document.documentElement.style.cssText +=
+  const childDocument = ensureWindowDocumentStructure(openedWindow)
+  if (!childDocument) {
+    return
+  }
+
+  childDocument.documentElement.style.cssText +=
     document.documentElement.style.cssText
-  openedWindow!.document.documentElement.style.backgroundColor = 'transparent'
-  openedWindow!.document.body.style.margin = '0px'
+  childDocument.documentElement.style.backgroundColor = 'transparent'
+  childDocument.body.style.margin = '0px'
 
   // openedWindow body's width and height should be set to inline-block to make sure the width and height are correct
-  openedWindow.document.body.style.display = 'inline-block'
-  openedWindow.document.body.style.minWidth = 'auto'
-  openedWindow.document.body.style.minHeight = 'auto'
-  openedWindow.document.body.style.maxWidth = 'fit-content'
-  openedWindow.document.body.style.minWidth = 'fit-content'
-  openedWindow.document.body.style.background = 'transparent'
+  childDocument.body.style.display = 'inline-block'
+  childDocument.body.style.minWidth = 'auto'
+  childDocument.body.style.minHeight = 'auto'
+  childDocument.body.style.maxWidth = 'fit-content'
+  childDocument.body.style.minWidth = 'fit-content'
+  childDocument.body.style.background = 'transparent'
 }
 
 async function syncParentHeadToChild(childWindow: WindowProxy) {
+  const childDocument = ensureWindowDocumentStructure(childWindow)
+  if (!childDocument) {
+    return []
+  }
+
   const styleLoadedPromises = []
 
   for (let i = 0; i < document.head.children.length; i++) {
@@ -81,12 +138,12 @@ async function syncParentHeadToChild(childWindow: WindowProxy) {
       )
       styleLoadedPromises.push(promise)
     } else {
-      childWindow.document.head.appendChild(n)
+      childDocument.head.appendChild(n)
     }
   }
 
   // sync className
-  childWindow.document.documentElement.className =
+  childDocument.documentElement.className =
     document.documentElement.className
 
   return Promise.all(styleLoadedPromises)
@@ -165,13 +222,11 @@ function SpatializedContent<P extends ElementType>(
   const spatialized2DElement = spatializedElement as Spatialized2DElement
   const windowProxy = spatialized2DElement.windowProxy
 
-  // On Android, we use a fake WindowProxy that doesn't have a real DOM.
-  // Skip portal rendering - content is already rendered in StandardSpatializedContainer
-  // and will be captured as bitmaps for native rendering.
-  const isAndroid = isAndroidPlatform()
+  // Bitmap mode uses a fake WindowProxy and captures from the root WebView instead.
+  const isAndroidBitmapMode = usesAndroidBitmapCapture()
 
-  // Only sync styles on non-Android platforms (visionOS has real WKWebView windows)
-  useSyncHeaderStyle(windowProxy, !isAndroid)
+  // Live window mode needs styles synced just like visionOS.
+  useSyncHeaderStyle(windowProxy, !isAndroidBitmapMode)
 
   const name: string = (restProps as any)['data-name'] || ''
   useSyncDocumentTitle(windowProxy, spatialized2DElement, name)
@@ -180,9 +235,12 @@ function SpatializedContent<P extends ElementType>(
     PortalInstanceContext,
   )!
 
-  // On Android, don't use createPortal since the fake WindowProxy
-  // doesn't have a real document.body DOM node
-  if (isAndroid) {
+  if (isAndroidBitmapMode) {
+    return null
+  }
+
+  const childDocument = ensureWindowDocumentStructure(windowProxy)
+  if (!childDocument?.body) {
     return null
   }
 
@@ -191,7 +249,7 @@ function SpatializedContent<P extends ElementType>(
     portalInstanceObject,
   )
 
-  return createPortal(JSXPortalInstance, windowProxy.document.body)
+  return createPortal(JSXPortalInstance, childDocument.body)
 }
 
 function getExtraSpatializedElementProperties(
@@ -219,9 +277,8 @@ async function createSpatializedElement() {
   const spatializedElement = await getSession()!.createSpatialized2DElement()
   const windowProxy = spatializedElement.windowProxy
 
-  // On Android, we use a fake WindowProxy that doesn't have a real DOM.
-  // Skip all WindowProxy operations - bitmap capture renders from main WebView.
-  if (isAndroidPlatform()) {
+  // Bitmap mode renders from the root WebView instead of per-element child windows.
+  if (usesAndroidBitmapCapture()) {
     console.log(
       '[WebSpatial] Android: Skipping WindowProxy setup, using bitmap capture',
     )
@@ -232,17 +289,24 @@ async function createSpatializedElement() {
   setOpenWindowStyle(windowProxy)
   await syncParentHeadToChild(windowProxy)
 
-  const viewport = windowProxy.document.querySelector('meta[name="viewport"]')
+  const childDocument = ensureWindowDocumentStructure(windowProxy)
+  if (!childDocument) {
+    return spatializedElement
+  }
+
+  const viewport = childDocument.document.querySelector(
+    'meta[name="viewport"]',
+  )
   if (viewport) {
     viewport?.setAttribute(
       'content',
       ` initial-scale=1.0, maximum-scale=1.0, user-scalable=no`,
     )
   } else {
-    const meta = windowProxy.document.createElement('meta')
+    const meta = childDocument.document.createElement('meta')
     meta.name = 'viewport'
     meta.content = 'initial-scale=1.0, maximum-scale=1.0, user-scalable=no'
-    windowProxy.document.head.appendChild(meta)
+    childDocument.head.appendChild(meta)
   }
 
   return spatializedElement

@@ -2,6 +2,8 @@ package com.example.webspatialandroid
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
 import android.util.Log
 import androidx.compose.runtime.mutableStateMapOf
@@ -12,6 +14,9 @@ import kotlin.math.abs
 /**
  * Observable state for spatial elements.
  * This allows Compose UI to react to changes from WebSpatial commands.
+ *
+ * Property updates are batched/coalesced to reduce UI thrashing when
+ * many updates come in rapidly (e.g., during animations or resize).
  */
 object SpatialElementState {
 
@@ -19,6 +24,26 @@ object SpatialElementState {
      * All tracked spatial elements (id -> properties)
      */
     val elements = mutableStateMapOf<String, SpatialElementProps>()
+
+    /**
+     * Pending updates to be batched
+     */
+    private val pendingUpdates = mutableMapOf<String, SpatialElementProps>()
+
+    /**
+     * Handler for debounced updates
+     */
+    private val updateHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Runnable for processing batched updates
+     */
+    private var batchUpdateRunnable: Runnable? = null
+
+    /**
+     * Batch window in milliseconds - updates within this window are coalesced
+     */
+    var batchWindowMs: Long = 16L // ~60fps frame time
 
     /**
      * The main panel's depth offset (derived from the maximum backOffset of all elements)
@@ -38,9 +63,60 @@ object SpatialElementState {
         get() = elements.isNotEmpty()
 
     /**
-     * Update or create a spatial element's properties
+     * Update or create a spatial element's properties.
+     * Updates are batched within a window to coalesce rapid changes.
+     *
+     * @param id Element ID
+     * @param props New properties
+     * @param immediate If true, bypass batching and apply immediately
      */
-    fun updateElement(id: String, props: SpatialElementProps) {
+    fun updateElement(id: String, props: SpatialElementProps, immediate: Boolean = false) {
+        if (immediate || batchWindowMs <= 0) {
+            // Apply immediately without batching
+            applyUpdate(id, props)
+            return
+        }
+
+        // Add to pending updates (overwrites previous pending update for same ID)
+        synchronized(pendingUpdates) {
+            pendingUpdates[id] = props
+        }
+
+        // Schedule batch processing if not already scheduled
+        if (batchUpdateRunnable == null) {
+            batchUpdateRunnable = Runnable {
+                processBatchedUpdates()
+            }
+            updateHandler.postDelayed(batchUpdateRunnable!!, batchWindowMs)
+        }
+    }
+
+    /**
+     * Process all pending batched updates
+     */
+    private fun processBatchedUpdates() {
+        val updates: Map<String, SpatialElementProps>
+        synchronized(pendingUpdates) {
+            updates = pendingUpdates.toMap()
+            pendingUpdates.clear()
+        }
+        batchUpdateRunnable = null
+
+        // Apply all updates in one batch
+        updates.forEach { (id, props) ->
+            elements[id] = props
+        }
+
+        // Only recalculate once after all updates
+        if (updates.isNotEmpty()) {
+            recalculatePanelState()
+        }
+    }
+
+    /**
+     * Apply a single update immediately
+     */
+    private fun applyUpdate(id: String, props: SpatialElementProps) {
         elements[id] = props
         recalculatePanelState()
     }
@@ -96,9 +172,12 @@ data class SpatialElementProps(
     var backOffset: Double = 0.0,
     var opacity: Double = 1.0,
     var visible: Boolean = true,
+    var scrollWithParent: Boolean = true,
     var zIndex: Double = 0.0,
     var cornerRadius: Double = 0.0,
     var backgroundMaterial: String = "none",
+    var parentId: String? = null,
+    var attachedToScene: Boolean = false,
     var transform: DoubleArray? = null,
     var enableTapGesture: Boolean = false,
     var enableDragGesture: Boolean = false,
@@ -156,18 +235,26 @@ data class SpatialElementProps(
         // Decode from base64 if data exists
         val data = bitmapData ?: return null
         return try {
-            // Remove data URL prefix if present (e.g., "data:image/png;base64,")
+            // Remove data URL prefix if present (e.g., "data:image/png;base64," or "data:image/webp;base64,")
             val base64Data = if (data.contains(",")) {
                 data.substringAfter(",")
             } else {
                 data
             }
+
             val bytes = Base64.decode(base64Data, Base64.DEFAULT)
+            Log.d("SpatialElementProps", "Decoding bitmap for $id: ${bytes.size} bytes, data prefix: ${data.take(50)}")
+
             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            if (bitmap == null) {
+                Log.e("SpatialElementProps", "BitmapFactory returned null for $id (${bytes.size} bytes)")
+            } else {
+                Log.d("SpatialElementProps", "Decoded bitmap for $id: ${bitmap.width}x${bitmap.height}")
+            }
             decodedBitmap = bitmap
             bitmap
         } catch (e: Exception) {
-            Log.e("SpatialElementProps", "Failed to decode bitmap: ${e.message}")
+            Log.e("SpatialElementProps", "Failed to decode bitmap for $id: ${e.message}")
             null
         }
     }

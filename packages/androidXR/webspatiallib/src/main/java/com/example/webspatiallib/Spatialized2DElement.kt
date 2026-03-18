@@ -45,6 +45,7 @@ class Spatialized2DElement : SpatialObject {
     var backOffset: Double = 0.0  // Z offset (positive = behind)
     var opacity: Double = 1.0
     var visible: Boolean = true
+    var scrollWithParent: Boolean = true
     var zIndex: Double = 0.0
     var cornerRadius: Double = 0.0
 
@@ -94,6 +95,7 @@ class Spatialized2DElement : SpatialObject {
         backOffset: Double? = null,
         opacity: Double? = null,
         visible: Boolean? = null,
+        scrollWithParent: Boolean? = null,
         zIndex: Double? = null,
         cornerRadius: Double? = null,
         backgroundMaterial: String? = null,
@@ -107,6 +109,7 @@ class Spatialized2DElement : SpatialObject {
         backOffset?.let { this.backOffset = it }
         opacity?.let { this.opacity = it }
         visible?.let { this.visible = it }
+        scrollWithParent?.let { this.scrollWithParent = it }
         zIndex?.let { this.zIndex = it }
         cornerRadius?.let { this.cornerRadius = it }
         backgroundMaterial?.let { this.backgroundMaterial = it }
@@ -114,7 +117,8 @@ class Spatialized2DElement : SpatialObject {
 
         Log.d(TAG, "Updated $id: pos=($clientX, $clientY), size=(${this.width}x${this.height}), " +
                 "backOffset=${this.backOffset}, material=${this.backgroundMaterial}, " +
-                "hasBitmap=${this.bitmapData != null}")
+                "scrollWithParent=${this.scrollWithParent}, parent=${this.parentElement?.id}, " +
+                "scene=${this.parentScene?.id}, hasBitmap=${this.bitmapData != null}")
     }
 
     /**

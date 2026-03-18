@@ -50,13 +50,22 @@ object WebMsg {
         val mainHandler = Handler(Looper.getMainLooper())
         mainHandler.post {
             try {
-                // Call the global WebSpatial message handler
+                // Match the visionOS bridge contract:
+                // window.__SpatialWebEvent({ id, data })
                 val script = """
-                    if (window.__WebSpatialMessage) {
-                        window.__WebSpatialMessage($messageJson);
-                    } else {
-                        console.warn('[WebSpatial] __WebSpatialMessage handler not found');
-                    }
+                    (function() {
+                        const msg = $messageJson;
+                        const data = { type: msg.type };
+                        if (msg.detail !== undefined) {
+                            data.detail = msg.detail;
+                        }
+
+                        if (window.__SpatialWebEvent) {
+                            window.__SpatialWebEvent({ id: msg.objectId, data: data });
+                        } else {
+                            console.warn('[WebSpatial] __SpatialWebEvent handler not found');
+                        }
+                    })();
                 """.trimIndent()
 
                 webview.webView.evaluateJavascript(script) { result ->
